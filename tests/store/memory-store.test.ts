@@ -204,6 +204,52 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       assert.equal(consolidatorCalled, false);
       assert.ok(result.error!.includes("exceed the limit"));
     });
+    it("defers auto-consolidation during the per-target overflow grace window", async () => {
+      let consolidatorCalls = 0;
+      const store = new MemoryStore(makeConfig({
+        memoryCharLimit: 180,
+        memoryOverflowStrategy: "auto-consolidate",
+        autoConsolidate: true,
+        overflowGraceMs: 60_000,
+      }));
+      store.setConsolidator(async () => {
+        consolidatorCalls++;
+        return { consolidated: true };
+      });
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} ${"seed".repeat(12)}`);
+
+      const firstOverflow = await store.add("memory", `${TEST_MARKER} ${"incoming".repeat(20)}`);
+      const secondOverflow = await store.add("memory", `${TEST_MARKER} ${"incoming-again".repeat(20)}`);
+
+      assert.equal(firstOverflow.success, false);
+      assert.equal(secondOverflow.success, false);
+      assert.equal(consolidatorCalls, 0);
+      assert.match(firstOverflow.error ?? "", /deferred/);
+      assert.match(secondOverflow.error ?? "", /deferred/);
+    });
+
+    it("clears overflow grace after a successful manual write", async () => {
+      let consolidatorCalls = 0;
+      const store = new MemoryStore(makeConfig({
+        memoryCharLimit: 180,
+        memoryOverflowStrategy: "auto-consolidate",
+        autoConsolidate: true,
+        overflowGraceMs: 60_000,
+      }));
+      store.setConsolidator(async () => {
+        consolidatorCalls++;
+        return { consolidated: false };
+      });
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} ${"seed".repeat(12)}`);
+      assert.equal((await store.add("memory", `${TEST_MARKER} ${"incoming".repeat(20)}`)).success, false);
+
+      const manual = await store.replace("memory", `${TEST_MARKER}`, `${TEST_MARKER} compact`);
+      assert.equal(manual.success, true);
+      assert.equal((await store.add("memory", `${TEST_MARKER} ${"incoming-again".repeat(20)}`)).success, false);
+      assert.equal(consolidatorCalls, 0);
+    });
 
     it("evicts oldest entries in file order when memoryOverflowStrategy is fifo-evict", async () => {
       let consolidatorCalled = false;
@@ -454,6 +500,33 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       const raw = await readRaw(memoryPath);
       assert.ok(!raw.includes(`${TEST_MARKER} uses vim`));
       assert.ok(raw.includes(`${TEST_MARKER} uses neovim`));
+    });
+    it("refuses fragment replacement that would discard sibling facts", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("user", "Name: Cataldo\nOS: Arch Linux\nPreference: concise replies");
+
+      const refused = await store.replace("user", "Name: Cataldo", "Name: Aldo");
+
+      assert.equal(refused.success, false);
+      assert.match(refused.error ?? "", /Refusing replace/);
+      assert.ok(store.getUserEntries().some((entry) => entry.includes("Arch Linux")));
+    });
+
+    it("strips metadata from multiline entries and accepts a full replacement", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("user", "Name: Cataldo\nOS: Arch Linux\nPreference: concise replies");
+
+      const replaced = await store.replace(
+        "user",
+        "Name: Cataldo",
+        "Name: Aldo\nOS: Arch Linux\nPreference: concise replies",
+      );
+
+      assert.equal(replaced.success, true);
+      assert.deepEqual(store.getUserEntries(), ["Name: Aldo\nOS: Arch Linux\nPreference: concise replies"]);
+      assert.match(await readRaw(userPath), /created=.*last=/);
     });
 
     it("returns error when no match found", async () => {
@@ -717,9 +790,9 @@ describe("MemoryStore", { concurrency: 1 }, () => {
 
       const result = store.formatForSystemPrompt();
       assert.ok(result.includes("RECENT FAILURES & LESSONS"));
-      assert.ok(result.includes(`${TEST_MARKER} failure 1`));
-      assert.ok(result.includes(`${TEST_MARKER} failure 5`));
-      assert.ok(!result.includes(`${TEST_MARKER} failure 6`), "default should preserve existing first-5 slice behavior");
+      assert.ok(!result.includes(`${TEST_MARKER} failure 1`));
+      assert.ok(result.includes(`${TEST_MARKER} failure 2`));
+      assert.ok(result.includes(`${TEST_MARKER} failure 6`));
     });
 
     it("does not inject failure memories when disabled", async () => {
@@ -746,9 +819,9 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       await store.loadFromDisk();
 
       const result = store.formatForSystemPrompt();
-      assert.ok(result.includes(`${TEST_MARKER} max entry 1`));
+      assert.ok(!result.includes(`${TEST_MARKER} max entry 1`));
       assert.ok(result.includes(`${TEST_MARKER} max entry 2`));
-      assert.ok(!result.includes(`${TEST_MARKER} max entry 3`));
+      assert.ok(result.includes(`${TEST_MARKER} max entry 3`));
     });
 
     it("respects configured failure injection max age days", async () => {
@@ -1558,6 +1631,29 @@ describe("MemoryStore", { concurrency: 1 }, () => {
         retiredFiles.map((name) => fs.readFile(path.join(MEMORY_DIR, name), "utf-8")),
       );
       assert.equal(retiredContents.some((content) => content.includes("outside sensitive content")), false);
+    });
+    it("bounds active recovery snapshots by count and bytes while keeping the newest", async () => {
+      const pathStore = new MemoryStore(makeConfig());
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} recovery seed`);
+
+      const recoveryPathFor = (pathStore as unknown as { recoveryPathFor(filePath: string): string }).recoveryPathFor.bind(pathStore);
+      for (let index = 0; index < 40; index++) {
+        const recoveryPath = recoveryPathFor(memoryPath);
+        await writeRaw(recoveryPath, `${TEST_MARKER} active recovery ${index}`);
+      }
+
+      await store.add("memory", `${TEST_MARKER} triggers active recovery pruning`);
+
+      const siblings = await fs.readdir(MEMORY_DIR);
+      const recoveryFiles = siblings.filter((name) => name.startsWith(`.${MEMORY_FILE}.recovery-`));
+      const recoveryStats = await Promise.all(
+        recoveryFiles.map((name) => fs.stat(path.join(MEMORY_DIR, name))),
+      );
+      assert.ok(recoveryFiles.length <= 32);
+      assert.ok(recoveryStats.reduce((total, stat) => total + stat.size, 0) <= 64 * 1024 * 1024);
+      assert.ok(recoveryFiles.length > 0);
     });
 
     it("bounds retired recovery snapshots by age, count, and bytes", async () => {
