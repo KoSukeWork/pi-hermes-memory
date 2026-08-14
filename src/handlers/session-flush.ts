@@ -11,7 +11,12 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { MemoryStore } from "../store/memory-store.js";
 import { DatabaseManager } from "../store/db.js";
-import { DIRECT_FLUSH_SYSTEM_PROMPT, ENTRY_DELIMITER, FLUSH_PROMPT } from "../constants.js";
+import {
+  buildMemoryTargetRoutingGuidance,
+  DIRECT_FLUSH_SYSTEM_PROMPT,
+  ENTRY_DELIMITER,
+  FLUSH_PROMPT,
+} from "../constants.js";
 import type { MemoryConfig } from "../types.js";
 import { collectMessageParts } from "./message-parts.js";
 import { execChildPrompt } from "./pi-child-process.js";
@@ -90,7 +95,11 @@ export function setupSessionFlush(
           store,
           activeProjectStore,
           {
-            systemPrompt: DIRECT_FLUSH_SYSTEM_PROMPT,
+            systemPrompt: [
+              DIRECT_FLUSH_SYSTEM_PROMPT,
+              "",
+              buildMemoryTargetRoutingGuidance(activeProjectStore !== null),
+            ].join("\n"),
             userPrompt: buildDirectFlushUserPrompt(store, activeProjectStore, parts),
             config,
             timeoutMs,
@@ -107,6 +116,8 @@ export function setupSessionFlush(
 
     const flushMessage = [
       FLUSH_PROMPT,
+      "",
+      buildMemoryTargetRoutingGuidance(activeProjectStore !== null),
       "",
       "--- Conversation ---",
       parts.join("\n\n"),

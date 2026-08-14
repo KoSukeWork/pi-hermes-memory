@@ -12,6 +12,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { MemoryStore } from "../store/memory-store.js";
 import { DatabaseManager } from "../store/db.js";
 import {
+  buildMemoryTargetRoutingGuidance,
   CORRECTION_SAVE_PROMPT,
   CORRECTION_STRONG_PATTERNS,
   CORRECTION_WEAK_PATTERNS,
@@ -210,7 +211,13 @@ export function setupCorrectionDetector(
       let savedViaLlm = false;
 
       const runSubprocessCorrection = async (): Promise<void> => {
-        const subprocessPrompt = [CORRECTION_SAVE_PROMPT, "", ...promptBody].join("\n");
+        const subprocessPrompt = [
+          CORRECTION_SAVE_PROMPT,
+          "",
+          buildMemoryTargetRoutingGuidance(activeProjectStore !== null),
+          "",
+          ...promptBody,
+        ].join("\n");
         const result = await execChildPrompt(pi, subprocessPrompt, config, {
           signal: ctx.signal,
           timeoutMs: 30000,
@@ -229,7 +236,11 @@ export function setupCorrectionDetector(
             store,
             activeProjectStore,
             {
-              systemPrompt: DIRECT_CORRECTION_SYSTEM_PROMPT,
+              systemPrompt: [
+                DIRECT_CORRECTION_SYSTEM_PROMPT,
+                "",
+                buildMemoryTargetRoutingGuidance(activeProjectStore !== null),
+              ].join("\n"),
               userPrompt: promptBody.join("\n"),
               config,
               timeoutMs: 30000,

@@ -744,6 +744,10 @@ describe("setupBackgroundReview", () => {
 
     assert.strictEqual(directCalls.length, 1, "direct review should run once");
     assert.strictEqual(execCalls.length, 0, "subprocess should not run on successful direct review");
+    const directOptions = directCalls[0][3] as { systemPrompt: string };
+    assert.match(directOptions.systemPrompt, /target routing/i);
+    assert.match(directOptions.systemPrompt, /use target "memory"/i);
+    assert.doesNotMatch(directOptions.systemPrompt, /target "project"/i);
     const reviewNotify = notifyCalls.find((n) => n.msg.includes("Memory auto-reviewed"));
     assert.ok(reviewNotify, "should notify when direct review applies memory");
   });
@@ -809,6 +813,33 @@ describe("setupBackgroundReview", () => {
     const reviewNotify = notifyCalls.find((n) => n.msg.includes("Memory auto-reviewed"));
     assert.strictEqual(reviewNotify, undefined, "empty direct review should not notify");
     assert.strictEqual(execCalls.length, 0, "empty direct review should not fall back");
+  });
+
+  it("includes explicit target routing for an available project store", () => {
+    const prompt = buildSubprocessReviewPrompt({
+      parts: ["[USER] hello", "[ASSISTANT] hi"],
+      currentMemory: "global fact",
+      currentUser: "user preference",
+      currentProject: "project convention",
+    });
+
+    assert.match(prompt, /project-specific facts.*target "project"/i);
+    assert.match(prompt, /global or cross-project facts.*target "memory"/i);
+    assert.match(prompt, /failures, corrections.*target "failure"/i);
+  });
+
+  it("keeps project target unavailable when no project store is present", () => {
+    const prompt = buildSubprocessReviewPrompt({
+      parts: ["[USER] hello", "[ASSISTANT] hi"],
+      currentMemory: "global fact",
+      currentUser: "user preference",
+      currentProject: null,
+    });
+
+    assert.match(prompt, /do not emit target "project"/i);
+    assert.match(prompt, /use target "memory"/i);
+    assert.match(prompt, /target "failure"/i);
+    assert.doesNotMatch(prompt, /current project memory/i);
   });
 
   it("builds separate prompts for direct and subprocess transports", () => {

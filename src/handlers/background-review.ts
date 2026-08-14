@@ -8,7 +8,11 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { COMBINED_REVIEW_PROMPT, DIRECT_REVIEW_SYSTEM_PROMPT } from "../constants.js";
+import {
+  buildMemoryTargetRoutingGuidance,
+  COMBINED_REVIEW_PROMPT,
+  DIRECT_REVIEW_SYSTEM_PROMPT,
+} from "../constants.js";
 import { MemoryStore } from "../store/memory-store.js";
 import { DatabaseManager } from "../store/db.js";
 import type { MemoryConfig } from "../types.js";
@@ -42,6 +46,8 @@ export interface ReviewPromptInput {
 export function buildSubprocessReviewPrompt(input: ReviewPromptInput): string {
   const reviewPrompt = [
     COMBINED_REVIEW_PROMPT,
+    "",
+    buildMemoryTargetRoutingGuidance(input.currentProject !== null),
     "",
     "--- Current Memory ---",
     input.currentMemory || "(empty)",
@@ -214,7 +220,16 @@ export function setupBackgroundReview(
             ctx as Pick<ExtensionContext, "model" | "modelRegistry">,
             store,
             activeProjectStore,
-            { userPrompt: directPrompt, systemPrompt: DIRECT_REVIEW_SYSTEM_PROMPT, config, timeoutMs: 120000 },
+            {
+              userPrompt: directPrompt,
+              systemPrompt: [
+                DIRECT_REVIEW_SYSTEM_PROMPT,
+                "",
+                buildMemoryTargetRoutingGuidance(activeProjectStore !== null),
+              ].join("\n"),
+              config,
+              timeoutMs: 120000,
+            },
             dbManager,
             activeProjectName,
           );

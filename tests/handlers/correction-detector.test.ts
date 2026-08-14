@@ -543,6 +543,29 @@ describe("setupCorrectionDetector handler", () => {
       );
     });
 
+    it("includes project and failure target routing in direct correction prompts", async () => {
+      const pi = createMockPi();
+      const { store } = storeWithFailureTracking();
+      const projectStore = { getMemoryEntries: () => ["existing project fact"] } as unknown as Parameters<typeof setupCorrectionDetector>[2];
+      setupCorrectionDetector(
+        pi,
+        store as unknown as MemoryStore,
+        projectStore,
+        directTransportConfig,
+        null,
+        "project-a",
+        makeDirectDeps({ ok: true, appliedCount: 1 }),
+      );
+
+      fireMessageEnd("user", "don't do that");
+      await fireTurnEnd(correctionBranch());
+
+      const options = directCalls[0][3] as { systemPrompt: string; userPrompt: string };
+      assert.match(options.systemPrompt, /project-specific facts.*target "project"/i);
+      assert.match(options.systemPrompt, /failures, corrections.*target "failure"/i);
+      assert.match(options.userPrompt, /--- Current Project Memory ---/);
+    });
+
     it("skips subprocess and omits memory-updated notify when direct ok with zero applied", async () => {
       const pi = createMockPi();
       const { store } = storeWithFailureTracking();

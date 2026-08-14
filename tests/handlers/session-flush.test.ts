@@ -488,9 +488,32 @@ describe("direct transport", () => {
     assert.equal(mockPi.execCalls.length, 0, "subprocess must not run on successful direct flush");
 
     const options = directCalls[0][3] as { systemPrompt: string; userPrompt: string };
-    assert.equal(options.systemPrompt, DIRECT_FLUSH_SYSTEM_PROMPT);
+    assert.match(options.systemPrompt, /target routing/i);
+    assert.match(options.systemPrompt, /use target "memory"/i);
+    assert.doesNotMatch(options.systemPrompt, /target "project"/i);
     assert.match(options.userPrompt, /--- Conversation ---/);
     assert.match(options.userPrompt, /msg 0/);
+  });
+
+  it("routes project facts to project target when a project store is available", async () => {
+    const config = defaultConfig({ reviewTransport: "direct" });
+    const projectStore = { getMemoryEntries: () => ["existing project fact"] } as unknown as Parameters<typeof setupSessionFlush>[2];
+    setupSessionFlush(
+      mockPi.pi,
+      mockStore,
+      projectStore,
+      config,
+      null,
+      "project-a",
+      makeDirectDeps({ ok: true, appliedCount: 1 }),
+    );
+
+    await primeFlushReady(mockPi.handlers);
+    await emit(mockPi.handlers, "session_before_compact", { signal: undefined }, defaultFlushCtx());
+
+    const options = directCalls[0][3] as { systemPrompt: string; userPrompt: string };
+    assert.match(options.systemPrompt, /project-specific facts.*target "project"/i);
+    assert.match(options.userPrompt, /--- Current Project Memory ---/);
   });
 
   it("falls back to subprocess with flush message shape when direct returns ok false", async () => {
