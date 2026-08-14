@@ -17,7 +17,7 @@ import { MemoryStore } from "../store/memory-store.js";
 import { DatabaseManager } from "../store/db.js";
 import type { MemoryConfig } from "../types.js";
 import { applyRecentMessageLimit, collectMessageParts } from "./message-parts.js";
-import { execChildPrompt } from "./pi-child-process.js";
+import { execChildPrompt, type ChildPiModel } from "./pi-child-process.js";
 import { runDirectMemoryCompletion, usesDirectTransport, type DirectReviewResult } from "./review-memory-ops.js";
 
 import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
@@ -108,14 +108,25 @@ function shouldNotifySubprocess(stdout: string | undefined): boolean {
   return !!output && !output.toLowerCase().includes("nothing to save");
 }
 
+function diagnosticDetail(value: unknown): string {
+  const detail = value instanceof Error ? value.message : String(value ?? "").trim();
+  return detail.replace(/\s+/g, " ").slice(0, 300);
+}
+
 async function runSubprocessReview(
   pi: ExtensionAPI,
   prompt: string,
   config: MemoryConfig,
   execChild: typeof execChildPrompt,
-): Promise<{ code: number; stdout?: string }> {
+  ctx: Pick<ExtensionContext, "cwd" | "model" | "signal">,
+): Promise<{ code: number; stdout?: string; stderr?: string }> {
+  const activeModel: ChildPiModel | undefined = ctx.model?.provider && ctx.model.id
+    ? { provider: ctx.model.provider, id: ctx.model.id }
+    : undefined;
   return execChild(pi, prompt, config, {
-    signal: undefined,
+    cwd: ctx.cwd,
+    model: activeModel,
+    signal: ctx.signal,
     timeoutMs: 120000,
   });
 }
@@ -214,6 +225,8 @@ export function setupBackgroundReview(
     };
 
     const runReview = async (): Promise<void> => {
+      let directFailure: string | undefined;
+
       if (usesDirectTransport(config)) {
         try {
           const directResult = await runDirectReview(
@@ -242,20 +255,45 @@ export function setupBackgroundReview(
           if (directResult.fallbackReason === "empty") {
             return;
           }
-        } catch {
-          // Fall through to subprocess below.
+          directFailure = [
+            directResult.fallbackReason ?? "failed",
+            directResult.error,
+          ].filter(Boolean).join(": ");
+        } catch (error) {
+          directFailure = diagnosticDetail(error);
         }
       }
 
-      const subprocessResult = await runSubprocessReview(pi, subprocessPrompt, config, execChild);
+      let subprocessResult: { code: number; stdout?: string; stderr?: string };
+      try {
+        subprocessResult = await runSubprocessReview(pi, subprocessPrompt, config, execChild, ctx);
+      } catch (error) {
+        if (directFailure) {
+          ctx.ui.notify(
+            `Memory auto-review failed in both transports. Direct: ${diagnosticDetail(directFailure)}. `
+              + `Subprocess: ${diagnosticDetail(error)}. Check the active model/provider or set llmModelOverride.`,
+            "warning",
+          );
+        }
+        return;
+      }
+
       if (subprocessResult.code === 0) {
         notifyIfSaved(shouldNotifySubprocess(subprocessResult.stdout));
+      } else if (directFailure) {
+        const subprocessDetail = subprocessResult.stderr?.trim() || subprocessResult.stdout?.trim()
+          || `exit code ${subprocessResult.code}`;
+        ctx.ui.notify(
+          `Memory auto-review failed in both transports. Direct: ${diagnosticDetail(directFailure)}. `
+            + `Subprocess: ${diagnosticDetail(subprocessDetail)}. Check the active model/provider or set llmModelOverride.`,
+          "warning",
+        );
       }
     };
 
     runReview()
       .catch(() => {
-        // Best-effort only
+        // Best-effort only; transport failures are diagnosed after both paths settle.
       })
       .finally(finishReview);
   });

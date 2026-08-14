@@ -16,8 +16,15 @@ interface PiExecResult {
   killed?: boolean;
 }
 
+export interface ChildPiModel {
+  provider: string;
+  id: string;
+}
+
 interface ExecChildPromptOptions {
   signal?: AbortSignal;
+  cwd?: string;
+  model?: ChildPiModel;
   timeoutMs: number;
   retryWithoutOverrides?: boolean;
 }
@@ -243,9 +250,11 @@ export function buildChildPiPromptArgs(
   prompt: string,
   config: ChildLlmConfig,
   _argv: string[] = process.argv.slice(2),
+  activeModel?: ChildPiModel,
 ): string[] {
   const args = ["-p", "--no-session"];
-  const model = normalizedModelOverride(config);
+  const model = normalizedModelOverride(config)
+    ?? (activeModel?.provider && activeModel.id ? `${activeModel.provider}/${activeModel.id}` : undefined);
   const thinking = effectiveThinkingOverride(config);
 
   if (model) args.push("--model", model);
@@ -402,6 +411,8 @@ export async function execChildPrompt(
   dependencies: ExecChildPromptDependencies = DEFAULT_EXEC_CHILD_PROMPT_DEPENDENCIES,
 ): Promise<PiExecResult> {
   const execOptions = {
+    cwd: options.cwd,
+    signal: options.signal,
     timeout: options.timeoutMs + WATCHDOG_EXIT_GRACE_MS,
   };
   const temporaryPrompt = await writePromptToTemporaryFile(prompt);
@@ -416,7 +427,7 @@ export async function execChildPrompt(
   try {
     try {
       const invocation = resolveWatchedChildPiInvocation(
-        resolveChildPiInvocation(buildChildPiPromptArgs(promptReference, config)),
+        resolveChildPiInvocation(buildChildPiPromptArgs(promptReference, config, process.argv.slice(2), options.model)),
         options.timeoutMs,
         cancellationPath,
       );

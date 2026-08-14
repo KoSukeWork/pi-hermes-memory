@@ -771,6 +771,66 @@ describe("setupBackgroundReview", () => {
     assert.strictEqual(directCalls.length, 1, "direct review should be attempted first");
     assert.strictEqual(execCalls.length, 1, "subprocess should run as fallback");
   });
+  it("inherits the active session model and execution context for subprocess fallback", async () => {
+    const pi = createMockPi();
+    setupWithDirectDeps(pi, { ok: false, appliedCount: 0, fallbackReason: "no_auth" }, {
+      ...defaultConfig,
+      reviewTransport: "direct",
+    });
+
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    const signal = new AbortController().signal;
+    for (let i = 0; i < 10; i++) {
+      fireTurnEnd(makeBranch(10), {
+        cwd: "/tmp/local-session",
+        model: { provider: "local-llama", id: "local-9b" },
+        signal,
+      });
+    }
+    await reviewSettledSignal.promise;
+
+    assert.deepStrictEqual(logicalChildArgs(0).slice(0, 5), [
+      "-p", "--no-session", "--model", "local-llama/local-9b", "--no-extensions",
+    ]);
+    assert.deepStrictEqual(execCalls[0][2], {
+      cwd: "/tmp/local-session",
+      signal,
+      timeout: 125000,
+    });
+  });
+
+  it("surfaces one actionable diagnostic when direct and subprocess review both fail", async () => {
+    const pi = createMockPi({ code: 1, stdout: "", stderr: "No API key for local-llama/local-9b" });
+    setupWithDirectDeps(pi, {
+      ok: false,
+      appliedCount: 0,
+      fallbackReason: "no_auth",
+      error: "No API key for local-llama",
+    }, {
+      ...defaultConfig,
+      reviewTransport: "direct",
+    });
+
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    for (let i = 0; i < 10; i++) {
+      fireTurnEnd(makeBranch(10), {
+        model: { provider: "local-llama", id: "local-9b" },
+      });
+    }
+    await reviewSettledSignal.promise;
+
+    const failures = notifyCalls.filter((n) => n.level === "warning");
+    assert.equal(failures.length, 1);
+    assert.match(failures[0].msg, /both transports/i);
+    assert.match(failures[0].msg, /no_auth/i);
+    assert.match(failures[0].msg, /No API key for local-llama\/local-9b/i);
+    assert.match(failures[0].msg, /llmModelOverride/i);
+  });
+
 
   it("falls back to subprocess when direct review throws", async () => {
     const pi = createMockPi();
