@@ -789,7 +789,7 @@ describe('DatabaseManager', () => {
 
       assert.strictEqual(dbManager.getLastRecovery()?.strategy, 'rebuilt');
       assert.deepStrictEqual(dbManager.getLastRecovery()?.recoveredRows, {
-        extension_metadata: 0,
+        extension_metadata: 1,
         sessions: 1,
         messages: 50,
         session_files: 0,

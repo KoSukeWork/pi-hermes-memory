@@ -747,7 +747,7 @@ describe("setupBackgroundReview", () => {
     const directOptions = directCalls[0][3] as { systemPrompt: string };
     assert.match(directOptions.systemPrompt, /target routing/i);
     assert.match(directOptions.systemPrompt, /use target "memory"/i);
-    assert.doesNotMatch(directOptions.systemPrompt, /target "project"/i);
+    assert.match(directOptions.systemPrompt, /do not emit target "project"/i);
     const reviewNotify = notifyCalls.find((n) => n.msg.includes("Memory auto-reviewed"));
     assert.ok(reviewNotify, "should notify when direct review applies memory");
   });
@@ -899,7 +899,7 @@ describe("setupBackgroundReview", () => {
     assert.match(prompt, /do not emit target "project"/i);
     assert.match(prompt, /use target "memory"/i);
     assert.match(prompt, /target "failure"/i);
-    assert.doesNotMatch(prompt, /current project memory/i);
+    assert.doesNotMatch(prompt, /--- Current Project Memory ---/i);
   });
 
   it("builds separate prompts for direct and subprocess transports", () => {

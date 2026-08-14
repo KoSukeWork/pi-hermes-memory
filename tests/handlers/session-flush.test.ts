@@ -457,7 +457,7 @@ describe("setupSessionFlush", () => {
 
     assert.equal(mockPi.execCalls.length, 1);
     const opts = mockPi.execCalls[0].args[2];
-    assert.equal(opts.signal, undefined, "signal must not be forwarded to the watchdog process");
+    assert.strictEqual(opts.signal, signal, "compact cancellation should reach pi.exec");
   });
 });
 
@@ -490,7 +490,7 @@ describe("direct transport", () => {
     const options = directCalls[0][3] as { systemPrompt: string; userPrompt: string };
     assert.match(options.systemPrompt, /target routing/i);
     assert.match(options.systemPrompt, /use target "memory"/i);
-    assert.doesNotMatch(options.systemPrompt, /target "project"/i);
+    assert.match(options.systemPrompt, /do not emit target "project"/i);
     assert.match(options.userPrompt, /--- Conversation ---/);
     assert.match(options.userPrompt, /msg 0/);
   });

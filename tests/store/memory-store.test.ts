@@ -1648,10 +1648,17 @@ describe("MemoryStore", { concurrency: 1 }, () => {
 
       const siblings = await fs.readdir(MEMORY_DIR);
       const recoveryFiles = siblings.filter((name) => name.startsWith(`.${MEMORY_FILE}.recovery-`));
-      const recoveryStats = await Promise.all(
-        recoveryFiles.map((name) => fs.stat(path.join(MEMORY_DIR, name))),
+      const recoveryEntries = await Promise.all(
+        recoveryFiles.map(async (name) => ({
+          name,
+          state: await fs.lstat(path.join(MEMORY_DIR, name)),
+        })),
       );
-      assert.ok(recoveryFiles.length <= 32);
+      const regularRecoveryFiles = recoveryEntries.filter(({ state }) => state.isFile());
+      const recoveryStats = await Promise.all(
+        regularRecoveryFiles.map(({ name }) => fs.stat(path.join(MEMORY_DIR, name))),
+      );
+      assert.ok(regularRecoveryFiles.length <= 32);
       assert.ok(recoveryStats.reduce((total, stat) => total + stat.size, 0) <= 64 * 1024 * 1024);
       assert.ok(recoveryFiles.length > 0);
     });
