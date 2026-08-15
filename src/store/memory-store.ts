@@ -571,7 +571,7 @@ export class MemoryStore {
       const maxFailures = this.config.failureInjectionMaxEntries ?? DEFAULT_FAILURE_INJECTION_MAX_ENTRIES;
       const recentFailures = this.getFailureEntries(maxAgeDays);
       if (recentFailures.length > 0) {
-        const failures = recentFailures.slice(-maxFailures).reverse();
+        const failures = maxFailures > 0 ? recentFailures.slice(-maxFailures).reverse() : [];
         if (failures.length > 0) {
           const failureBlock = this.renderFailureBlock(failures);
           parts.push(this.fenceBlock(failureBlock));
@@ -748,17 +748,17 @@ export class MemoryStore {
     return createHash("sha256").update(content).digest("hex");
   }
 
-  private async readFileState(filePath: string): Promise<{ entries: string[]; fingerprint: string }> {
+  private async readFileState(filePath: string): Promise<{ entries: string[]; fingerprint: string; size: number }> {
     try {
       const raw = await fs.readFile(filePath);
       const content = raw.toString("utf-8");
       const entries = content.trim()
         ? content.split(ENTRY_DELIMITER).map((entry) => entry.trim()).filter(Boolean)
         : [];
-      return { entries, fingerprint: this.fingerprint(raw) };
+      return { entries, fingerprint: this.fingerprint(raw), size: raw.byteLength };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return { entries: [], fingerprint: "missing" };
+        return { entries: [], fingerprint: "missing", size: 0 };
       }
       throw error;
     }
@@ -876,11 +876,11 @@ export class MemoryStore {
 
     try {
       await fs.writeFile(tmpPath, content, "utf-8");
-      await this.pruneRecoveryFiles(filePath, Buffer.byteLength(content, "utf8"));
       const currentState = await this.readFileState(filePath);
       if (currentState.fingerprint !== expectedFingerprint) {
         throw new ExternalMemoryWriteConflict();
       }
+      await this.pruneRecoveryFiles(filePath, currentState.size);
 
       if (expectedFingerprint === "missing") {
         try {

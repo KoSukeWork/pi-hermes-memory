@@ -883,6 +883,16 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       assert.ok(result.includes(`${TEST_MARKER} max entry 3`));
     });
 
+    it("injects no failure memories when max entries is zero", async () => {
+      await writeRaw(failurePath, failureEntry(`${TEST_MARKER} excluded failure`));
+      const store = new MemoryStore(makeConfig({ failureInjectionMaxEntries: 0 }));
+      await store.loadFromDisk();
+
+      const result = store.formatForSystemPrompt();
+      assert.ok(!result.includes("RECENT FAILURES & LESSONS"));
+      assert.ok(!result.includes(`${TEST_MARKER} excluded failure`));
+    });
+
     it("respects configured failure injection max age days", async () => {
       await writeRaw(failurePath, [
         failureEntry(`${TEST_MARKER} recent failure`, 1),
@@ -1691,9 +1701,11 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       );
       assert.equal(retiredContents.some((content) => content.includes("outside sensitive content")), false);
     });
-    it("budgets an upcoming recovery snapshot in UTF-8 bytes", async () => {
+    it("budgets the displaced recovery snapshot in file bytes", async () => {
       const store = new MemoryStore(makeConfig());
       await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} 记忆 🧠`);
+      const displaced = await fs.stat(memoryPath);
       let upcomingBytes: number | undefined;
       const instrumentedStore = store as unknown as {
         pruneRecoveryFiles(filePath: string, bytes?: number): Promise<void>;
@@ -1702,10 +1714,9 @@ describe("MemoryStore", { concurrency: 1 }, () => {
         upcomingBytes = bytes;
       };
 
-      await store.add("memory", `${TEST_MARKER} 记忆 🧠`);
+      await store.add("memory", `${TEST_MARKER} next entry`);
 
-      const persisted = await fs.stat(memoryPath);
-      assert.equal(upcomingBytes, persisted.size);
+      assert.equal(upcomingBytes, displaced.size);
     });
 
     it("bounds active recovery snapshots by count and bytes while keeping the newest", async () => {
