@@ -72,6 +72,7 @@ class DatabaseCorruptionError extends Error {
 
 export const SQLITE_BUSY_TIMEOUT_MS = 5000;
 export const SQLITE_WAL_AUTOCHECKPOINT_PAGES = 1000;
+export const FTS5_MIGRATION_MAX_LOCK_ATTEMPTS = 3;
 
 const FTS5_TOKENIZER_VERSION_KEY = 'fts5_tokenizer_version';
 const FTS5_TOKENIZER_VERSION = 'trigram-v1';
@@ -1041,13 +1042,21 @@ export class DatabaseManager {
       return code.startsWith('SQLITE_BUSY') || code.startsWith('SQLITE_LOCKED');
     };
 
+    let lockAttempts = 0;
     while (!migrationComplete()) {
       try {
         db.exec('BEGIN IMMEDIATE');
       } catch (error) {
-        // busy_timeout bounds each wait, not the migration. Keep waiting for
-        // the owner of an unbounded FTS rebuild instead of failing startup.
-        if (isBusy(error)) continue;
+        // Each attempt waits up to busy_timeout. Cap the total attempts so a
+        // permanently held writer cannot hang extension startup forever.
+        if (isBusy(error) && ++lockAttempts < FTS5_MIGRATION_MAX_LOCK_ATTEMPTS) continue;
+        if (isBusy(error)) {
+          throw new Error(
+            `Timed out waiting for the FTS tokenizer migration lock after ${lockAttempts} attempts. `
+              + "Close the other Pi process and retry.",
+            { cause: error },
+          );
+        }
         throw error;
       }
 

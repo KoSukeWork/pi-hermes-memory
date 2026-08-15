@@ -1120,6 +1120,22 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       assert.deepEqual((store as any).memoryEntries, beforeEntries);
     });
 
+    it("refuses an atomic fragment replacement that would discard sibling facts", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("user", "Name: Cataldo\nOS: Arch Linux\nPreference: concise replies");
+      const beforeDisk = await readRaw(userPath);
+
+      const result = await store.applyMutationPlan("user", [
+        { action: "replace", oldText: "Name: Cataldo", content: "Name: Aldo" },
+      ]);
+
+      assert.equal(result.success, false);
+      assert.match(result.error ?? "", /Refusing replace/);
+      assert.equal(await readRaw(userPath), beforeDisk);
+      assert.ok(store.getUserEntries().some((entry) => entry.includes("Arch Linux")));
+    });
+
     it("rejects invalid plans before publishing any draft", async () => {
       const store = new MemoryStore(makeConfig());
       await store.loadFromDisk();

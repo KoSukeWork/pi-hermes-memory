@@ -412,6 +412,8 @@ export class MemoryStore {
         if (!content) return { success: false, error: "Memory mutation replace requires content." };
         const scanError = scanContent(content);
         if (scanError) return { success: false, error: scanError };
+        const replacementError = this.validateWholeEntryReplacement(matches, oldText, content);
+        if (replacementError) return { success: false, error: replacementError };
         const replacements = new Map(matches.map((entry) => {
           const decoded = this.decodeEntry(entry);
           return [entry, this.encodeEntry(content, decoded.created, today, decoded.project ?? undefined)];
@@ -476,29 +478,8 @@ export class MemoryStore {
       };
     }
 
-    // replace() intentionally swaps the whole matched entry. Refuse a
-    // fragment-only replacement when the entry contains multiple lines, so
-    // bundled sibling facts cannot be discarded without an explicit
-    // full-entry replacement.
-    for (const entry of matches) {
-      const strippedEntry = this.stripMetadata(entry);
-      const entryLines = strippedEntry.split("\n").map((line) => line.trim()).filter(Boolean);
-      if (entryLines.length <= 1) continue;
-      const missingLines = entryLines.filter(
-        (line) => !line.includes(oldText) && !newContent.includes(line),
-      );
-      if (missingLines.length > 0) {
-        return {
-          success: false,
-          error:
-            `Refusing replace: the matched entry has ${entryLines.length} lines, but 'content' ` +
-            `does not include ${missingLines.length} of them: ${JSON.stringify(missingLines)}. ` +
-            `replace() swaps the WHOLE entry, so 'content' must contain everything you want to ` +
-            `keep from it (not just the changed part), or split the entry into separate ` +
-            `single-fact entries first.`,
-        };
-      }
-    }
+    const replacementError = this.validateWholeEntryReplacement(matches, oldText, newContent);
+    if (replacementError) return { success: false, error: replacementError };
     const today = new Date().toISOString().split("T")[0];
     const replacements = new Map(matches.map((entry) => {
       const decoded = this.decodeEntry(entry);
@@ -647,6 +628,31 @@ export class MemoryStore {
   /** Strip metadata comment from entry text for display. */
   private stripMetadata(text: string): string {
     return this.decodeEntry(text).text;
+  }
+
+  /**
+   * A replacement always swaps an entire entry. Keep that contract safe for
+   * both individual mutations and atomic plans by refusing a fragment that
+   * omits sibling lines from a multi-fact entry.
+   */
+  private validateWholeEntryReplacement(entries: string[], oldText: string, newContent: string): string | undefined {
+    for (const entry of entries) {
+      const entryLines = this.stripMetadata(entry).split("\n").map((line) => line.trim()).filter(Boolean);
+      if (entryLines.length <= 1) continue;
+      const missingLines = entryLines.filter(
+        (line) => !line.includes(oldText) && !newContent.includes(line),
+      );
+      if (missingLines.length > 0) {
+        return (
+          `Refusing replace: the matched entry has ${entryLines.length} lines, but 'content' ` +
+          `does not include ${missingLines.length} of them: ${JSON.stringify(missingLines)}. ` +
+          `replace() swaps the WHOLE entry, so 'content' must contain everything you want to ` +
+          `keep from it (not just the changed part), or split the entry into separate ` +
+          `single-fact entries first.`
+        );
+      }
+    }
+    return undefined;
   }
 
   private areDistinctScopedFailureCopies(

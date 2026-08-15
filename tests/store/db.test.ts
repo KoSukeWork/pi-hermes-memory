@@ -292,6 +292,37 @@ describe('DatabaseManager', () => {
       assert.strictEqual(rebuildAttempted, false);
     });
 
+    it('fails startup with an actionable error when the tokenizer migration lock remains held', () => {
+      let beginAttempts = 0;
+      const fakeDb = {
+        prepare: (sql: string) => ({
+          get: () => {
+            if (sql.includes('extension_metadata')) return undefined;
+            if (sql.includes('sqlite_master')) return { sql: "CREATE VIRTUAL TABLE x USING fts5(content)" };
+            return undefined;
+          },
+          run: () => undefined,
+          all: () => [],
+        }),
+        exec: (sql: string) => {
+          if (sql === 'BEGIN IMMEDIATE') {
+            beginAttempts++;
+            throw Object.assign(new Error('database is busy'), { code: 'SQLITE_BUSY' });
+          }
+        },
+        close: () => undefined,
+      };
+      const internalManager = dbManager as unknown as {
+        migrateFtsTokenizer(db: typeof fakeDb): void;
+      };
+
+      assert.throws(
+        () => internalManager.migrateFtsTokenizer(fakeDb),
+        /Timed out waiting for the FTS tokenizer migration lock/i,
+      );
+      assert.strictEqual(beginAttempts, 3);
+    });
+
 
     it('should create triggers for FTS sync', () => {
       const db = dbManager.getDb();

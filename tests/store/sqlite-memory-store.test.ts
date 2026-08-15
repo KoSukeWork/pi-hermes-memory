@@ -362,10 +362,12 @@ describe('sqlite-memory-store', () => {
       assert.ok(results.some((result) => result.content.includes('NAS')));
     });
 
-    it('documents that one- and two-character queries do not match trigram FTS', () => {
+    it('falls back to a scoped literal search for one- and two-character CJK queries', () => {
       addMemory(dbManager, '设备清单包含 NAS 和备份策略');
 
-      assert.deepStrictEqual(searchMemories(dbManager, '设备'), []);
+      const results = searchMemories(dbManager, '设备');
+
+      assert.ok(results.some((result) => result.content.includes('设备清单')));
     });
 
 
