@@ -19,7 +19,7 @@ import {
 } from "../constants.js";
 import type { MemoryConfig } from "../types.js";
 import { collectMessageParts } from "./message-parts.js";
-import { execChildPrompt } from "./pi-child-process.js";
+import { execChildPrompt, resolveChildPiModel } from "./pi-child-process.js";
 import { runDirectMemoryCompletion, usesDirectTransport } from "./review-memory-ops.js";
 import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
 
@@ -71,7 +71,7 @@ export function setupSessionFlush(
 
   /** Shared flush logic — builds conversation snapshot and saves memories */
   async function flush(
-    ctx: Pick<ExtensionContext, "sessionManager" | "model" | "modelRegistry">,
+    ctx: Pick<ExtensionContext, "sessionManager" | "model" | "modelRegistry" | "cwd">,
     signal?: AbortSignal,
     timeoutMs = 30000,
   ): Promise<void> {
@@ -125,11 +125,13 @@ export function setupSessionFlush(
 
     try {
       await execChildPrompt(pi, flushMessage, config, {
+        cwd: ctx.cwd,
+        model: resolveChildPiModel(ctx.model),
         signal,
         timeoutMs,
       });
     } catch {
-      // Best-effort flush — never block shutdown
+      // Best-effort flush — never block compaction or shutdown.
     }
   }
 
@@ -139,11 +141,10 @@ export function setupSessionFlush(
     await flush(ctx, event.signal, 30000);
   });
 
-  // Flush before session shutdown (must be fast, non-blocking)
-  pi.on("session_shutdown", async (event, ctx) => {
+  // Flush before session shutdown. Pi awaits async session_shutdown handlers
+  // before invalidating the session, so await the bounded flush here.
+  pi.on("session_shutdown", async (_event, ctx) => {
     if (!config.flushOnShutdown) return;
-    // Fire-and-forget with a short timeout so we don't block Pi's shutdown.
-    // We intentionally do NOT await — Pi should not wait for the child process.
-    flush(ctx, undefined, 10000).catch(() => {});
+    await flush(ctx, undefined, 10000);
   });
 }

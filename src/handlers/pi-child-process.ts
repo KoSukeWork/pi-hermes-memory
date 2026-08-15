@@ -21,6 +21,14 @@ export interface ChildPiModel {
   id: string;
 }
 
+export function resolveChildPiModel(
+  model: { provider?: string; id?: string } | undefined,
+): ChildPiModel | undefined {
+  return model?.provider && model.id
+    ? { provider: model.provider, id: model.id }
+    : undefined;
+}
+
 interface ExecChildPromptOptions {
   signal?: AbortSignal;
   cwd?: string;

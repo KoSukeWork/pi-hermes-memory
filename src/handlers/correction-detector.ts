@@ -23,7 +23,7 @@ import {
 } from "../constants.js";
 import type { MemoryConfig } from "../types.js";
 import { getMessageText } from "../types.js";
-import { execChildPrompt } from "./pi-child-process.js";
+import { execChildPrompt, resolveChildPiModel } from "./pi-child-process.js";
 import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
 import { runDirectMemoryCompletion, usesDirectTransport } from "./review-memory-ops.js";
 
@@ -219,6 +219,8 @@ export function setupCorrectionDetector(
           ...promptBody,
         ].join("\n");
         const result = await execChildPrompt(pi, subprocessPrompt, config, {
+          cwd: ctx.cwd,
+          model: resolveChildPiModel(ctx.model),
           signal: ctx.signal,
           timeoutMs: 30000,
         });

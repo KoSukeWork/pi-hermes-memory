@@ -17,7 +17,7 @@ import { MemoryStore } from "../store/memory-store.js";
 import { DatabaseManager } from "../store/db.js";
 import type { MemoryConfig } from "../types.js";
 import { applyRecentMessageLimit, collectMessageParts } from "./message-parts.js";
-import { execChildPrompt, type ChildPiModel } from "./pi-child-process.js";
+import { execChildPrompt, resolveChildPiModel } from "./pi-child-process.js";
 import { runDirectMemoryCompletion, usesDirectTransport, type DirectReviewResult } from "./review-memory-ops.js";
 
 import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
@@ -120,12 +120,9 @@ async function runSubprocessReview(
   execChild: typeof execChildPrompt,
   ctx: Pick<ExtensionContext, "cwd" | "model" | "signal">,
 ): Promise<{ code: number; stdout?: string; stderr?: string }> {
-  const activeModel: ChildPiModel | undefined = ctx.model?.provider && ctx.model.id
-    ? { provider: ctx.model.provider, id: ctx.model.id }
-    : undefined;
   return execChild(pi, prompt, config, {
     cwd: ctx.cwd,
-    model: activeModel,
+    model: resolveChildPiModel(ctx.model),
     signal: ctx.signal,
     timeoutMs: 120000,
   });

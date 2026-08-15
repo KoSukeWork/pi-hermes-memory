@@ -315,7 +315,10 @@ describe("setupCorrectionDetector handler", () => {
   function makeCtx(branch: any[] = []) {
     return {
       sessionManager: { getBranch: () => branch },
-      signal: undefined as any,
+      signal: undefined,
+      cwd: "/tmp/active-project",
+      model: { provider: "local-llama", id: "local-9b" },
+      modelRegistry: {},
       ui: {
         notify: (msg: string, level: string) => {
           notifyCalls.push({ msg, level });
@@ -366,6 +369,12 @@ describe("setupCorrectionDetector handler", () => {
     await fireTurnEnd(branch);
 
     assert.ok(execCalls.length >= 1, "pi.exec should be called on correction");
+    const options = execCalls[0][2] as { cwd?: string };
+    assert.equal(options.cwd, "/tmp/active-project");
+    const args = logicalChildArgs(execCalls[0]);
+    assert.deepStrictEqual(args.slice(0, 4), [
+      "-p", "--no-session", "--model", "local-llama/local-9b",
+    ]);
   });
 
   it("passes child LLM override args and defaults thinking to off when only a model override is set", async () => {

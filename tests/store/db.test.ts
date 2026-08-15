@@ -420,6 +420,15 @@ describe('DatabaseManager', () => {
       assert.strictEqual(rows[0].content, 'existing memory');
       assert.strictEqual(rows[1].target, 'failure');
 
+      const indexes = migratedDb.prepare(`
+        SELECT name FROM sqlite_master
+        WHERE type = 'index' AND name IN ('idx_memories_project', 'idx_memories_target', 'idx_memories_category')
+      `).all() as Array<{ name: string }>;
+      assert.deepStrictEqual(
+        indexes.map((row) => row.name).sort(),
+        ['idx_memories_category', 'idx_memories_project', 'idx_memories_target'],
+      );
+
       migratedManager.close();
     });
   });

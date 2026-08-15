@@ -343,6 +343,9 @@ export class DatabaseManager {
     // CHECK(target IN ('memory','user')) constraints to include 'failure'.
     this.ensureLegacySchemaColumns(db);
     this.migrateLegacyMemoriesTargetConstraint(db);
+    // Recreate indexes after any legacy table replacement. `DROP TABLE`
+    // removes indexes attached to the old memories table.
+    this.ensureMemoryIndexes(db);
     this.migrateFtsTokenizer(db);
   }
 
@@ -918,6 +921,14 @@ export class DatabaseManager {
       update.run(project, row.id);
     }
   }
+  private ensureMemoryIndexes(db: DatabaseLike): void {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project);
+      CREATE INDEX IF NOT EXISTS idx_memories_target ON memories(target);
+      CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category);
+    `);
+  }
+
 
   private migrateLegacyMemoriesTargetConstraint(db: DatabaseLike): void {
     const tableSqlRow = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='memories'").get() as { sql?: string } | undefined;

@@ -211,6 +211,38 @@ describe("setupSessionFlush", () => {
     assert.equal(mockPi.execCalls.length, 1, "exec should be called once");
   });
 
+  it("awaits the bounded flush before session_shutdown resolves", async () => {
+    const config = defaultConfig();
+    setupSessionFlush(mockPi.pi, mockStore, null, config);
+
+    await emitUserTurns(mockPi.handlers, 8);
+
+    const { promise: execStarted, resolve: markExecStarted } = Promise.withResolvers<void>();
+    const { promise: releaseExec, resolve: release } = Promise.withResolvers<void>();
+    mockPi.pi.exec = async (...args: unknown[]) => {
+      markExecStarted();
+      await releaseExec;
+      return { code: 0, stdout: "", stderr: "" };
+    };
+
+    const ctx = {
+      sessionManager: { getBranch: () => mockBranch(8) },
+      cwd: "/tmp/active-project",
+      model: undefined,
+      modelRegistry: {},
+    };
+    const shutdown = mockPi.handlers["session_shutdown"][0]({}, ctx);
+    await execStarted;
+
+    let settled = false;
+    void shutdown.then(() => { settled = true; });
+    await Promise.resolve();
+    assert.equal(settled, false, "shutdown handler must await the flush");
+
+    release();
+    await shutdown;
+  });
+
   it("session_shutdown does NOT trigger when flushOnShutdown is false", async () => {
     const config = defaultConfig({ flushOnShutdown: false });
     setupSessionFlush(mockPi.pi, mockStore, null, config);
@@ -293,6 +325,28 @@ describe("setupSessionFlush", () => {
     // Options should include timeout
     assert.ok(opts, "options should be passed");
     assert.equal(opts.timeout, 35000);
+  });
+
+  it("forwards active cwd and model to flush subprocesses", async () => {
+    const config = defaultConfig();
+    setupSessionFlush(mockPi.pi, mockStore, null, config);
+
+    await emitUserTurns(mockPi.handlers, 8);
+
+    const ctx = {
+      sessionManager: { getBranch: () => mockBranch(4) },
+      cwd: "/tmp/active-project",
+      model: { provider: "local-llama", id: "local-9b" },
+      modelRegistry: {},
+    };
+    await emit(mockPi.handlers, "session_before_compact", { signal: undefined }, ctx);
+
+    const [, , opts] = mockPi.execCalls[0].args;
+    assert.equal(opts.cwd, "/tmp/active-project");
+    const args = logicalChildArgs(mockPi.execCalls[0]);
+    assert.deepStrictEqual(args.slice(0, 4), [
+      "-p", "--no-session", "--model", "local-llama/local-9b",
+    ]);
   });
 
   it("passes child LLM override args to flush subprocesses", async () => {
