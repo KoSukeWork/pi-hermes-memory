@@ -14,6 +14,14 @@ interface SearchResult {
   output?: string;
 }
 
+function mutationTarget(entry: { target: "memory" | "user" | "failure"; project: string | null }): "memory" | "user" | "failure" | "project" {
+  return entry.project ? "project" : entry.target;
+}
+
+function scopeLabel(project: string | null): string {
+  return project ? `project:${project}` : "global";
+}
+
 export function registerMemorySearchTool(pi: ExtensionAPI, dbManager: DatabaseManager): void {
   pi.registerTool({
     name: 'memory_search',
@@ -26,7 +34,7 @@ Use cases:
 - Find user preferences: "What are the user's testing preferences?"
 - Search for past failures: "memory_search('auth', category='failure')"
 
-Returns matching memory entries with project context and dates.`,
+Returns matching memory entries with their mutation target, scope, and dates. The displayed target is the value required by memory_replace and memory_remove.`,
     promptSnippet: 'Search extended memory store (unlimited capacity)',
     promptGuidelines: [
       'Use memory_search when you need context beyond what is in the system prompt.',
@@ -69,10 +77,12 @@ Returns matching memory entries with project context and dates.`,
       let output = `Found ${results.length} memories matching "${query}":\n\n`;
 
       for (const entry of results) {
-        const projectLabel = entry.project ? `[${entry.project}]` : '[global]';
+        const target = mutationTarget(entry);
+        const projectLabel = `[scope=${scopeLabel(entry.project)}]`;
+        const mutationTargetLabel = `[target=${target}]`;
         const targetLabel = entry.target === 'user' ? '👤' : entry.target === 'failure' ? '⚠️' : '🧠';
         const categoryLabel = entry.category ? ` [${entry.category}]` : '';
-        output += `${targetLabel} ${projectLabel}${categoryLabel} ${entry.content}\n`;
+        output += `${targetLabel} ${projectLabel} ${mutationTargetLabel}${categoryLabel} ${entry.content}\n`;
         output += `   Created: ${entry.created} | Last used: ${entry.lastReferenced}\n\n`;
       }
 

@@ -41,4 +41,25 @@ describe('registerMemorySearchTool', () => {
 
     dbManager.close();
   });
+
+  it('labels every result with its mutation target and unambiguous scope', async () => {
+    const dbManager = makeDbManager();
+    addMemory(dbManager, 'global deployment convention');
+    addMemory(dbManager, 'user deployment preference', 'user');
+    addMemory(dbManager, 'failure deployment lesson', 'failure');
+    addMemory(dbManager, 'project deployment convention', 'memory', 'project-a');
+
+    let captured: any;
+    registerMemorySearchTool({ registerTool: (def: any) => { captured = def; } } as any, dbManager);
+
+    const result = await captured.execute('tc-1', { query: 'deployment' });
+    const text = result.content[0].text;
+
+    assert.match(text, /\[scope=global\] \[target=memory\] global deployment convention/);
+    assert.match(text, /\[scope=global\] \[target=user\] user deployment preference/);
+    assert.match(text, /\[scope=global\] \[target=failure\] failure deployment lesson/);
+    assert.match(text, /\[scope=project:project-a\] \[target=project\] project deployment convention/);
+
+    dbManager.close();
+  });
 });

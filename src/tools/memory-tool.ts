@@ -21,6 +21,7 @@ import {
 import { MEMORY_TOOL_DESCRIPTION } from "../constants.js";
 import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
 import type { MemoryCategory, MemoryResult } from "../types.js";
+import { normalizeMemoryLookupText } from "../store/memory-lookup.js";
 import { createSharedToolResultRenderer } from "./shared-output-view.js";
 import { memoryResultView } from "./tool-result-views.js";
 
@@ -69,6 +70,44 @@ function sqliteProjectFor(rawTarget: "memory" | "user" | "project" | "failure", 
 function sqliteTargetFor(rawTarget: "memory" | "user" | "project" | "failure"): "memory" | "user" | "failure" {
   if (rawTarget === "project") return "memory";
   return rawTarget;
+}
+
+function matchingMutationTargets(
+  oldText: string,
+  store: MemoryStore,
+  projectStore: MemoryStore | null,
+): Array<"memory" | "user" | "failure" | "project"> {
+  const lookup = normalizeMemoryLookupText(oldText);
+  if (!lookup) return [];
+
+  const targets: Array<"memory" | "user" | "failure" | "project"> = [];
+  if (store.getMemoryEntries().some((entry) => entry.includes(lookup))) targets.push("memory");
+  if (store.getUserEntries().some((entry) => entry.includes(lookup))) targets.push("user");
+  if (store.getAllFailureEntries().some((entry) => entry.includes(lookup))) targets.push("failure");
+  if (projectStore?.getMemoryEntries().some((entry) => entry.includes(lookup))) targets.push("project");
+  return targets;
+}
+
+function addWrongTargetHint(
+  result: MemoryResult,
+  rawTarget: "memory" | "user" | "project" | "failure",
+  oldText: string,
+  store: MemoryStore,
+  projectStore: MemoryStore | null,
+): MemoryResult {
+  if (result.success || !result.error?.startsWith("No entry matched")) return result;
+
+  const alternatives = matchingMutationTargets(oldText, store, projectStore)
+    .filter((target) => target !== rawTarget);
+  if (alternatives.length === 0) return result;
+
+  const quotedTargets = alternatives.map((target) => `"${target}"`).join(", ");
+  const noun = alternatives.length === 1 ? "target" : "targets";
+  return {
+    ...result,
+    error: `No match in target "${rawTarget}"; matching entry found in ${noun} ${quotedTargets}. Retry with the displayed target.`,
+    matching_targets: alternatives,
+  };
 }
 
 async function syncAddToSqlite(
@@ -328,6 +367,10 @@ export function registerMemoryTool(
           syncWarning = await syncRemoveFromSqlite(rawTarget, old_text, dbManager, activeProjectName);
         }
         break;
+    }
+
+    if (action !== "add" && old_text) {
+      result = addWrongTargetHint(result, rawTarget, old_text, store, activeProjectStore);
     }
 
     if (result.success && !syncHandled && typeof store_.getRawEntriesForSync === "function") {
