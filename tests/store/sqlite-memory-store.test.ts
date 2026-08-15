@@ -291,7 +291,7 @@ describe('sqlite-memory-store', () => {
 
       const result = replaceSyncedMemories(
         dbManager,
-        '🧠 [global] prefers pnpm over npm\n   Created: 2026-05-27 | Last used: 2026-05-27',
+        '🧠 scope=global [target=memory] prefers pnpm over npm\n   Created: 2026-05-27 | Last used: 2026-05-27',
         {
           content: 'prefers pnpm over npm and bun when needed',
           target: 'memory',

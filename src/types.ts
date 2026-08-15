@@ -111,6 +111,8 @@ export interface MemoryResult {
   evicted_entries?: string[];
   evicted_count?: number;
   matches?: string[];
+  /** Targets that contain old_text when a replace/remove was sent to the wrong one. */
+  matching_targets?: Array<"memory" | "user" | "failure" | "project">;
 }
 
 export interface MemoryMutationOperation {

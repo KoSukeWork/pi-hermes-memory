@@ -696,7 +696,7 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       await store.add("memory", `${TEST_MARKER} prefers pnpm over npm`);
       await settle();
 
-      const result = await store.remove("memory", `🧠 [global] ${TEST_MARKER} prefers pnpm over npm\n   Created: 2026-05-27 | Last used: 2026-05-27`);
+      const result = await store.remove("memory", `🧠 scope=global [target=memory] ${TEST_MARKER} prefers pnpm over npm\n   Created: 2026-05-27 | Last used: 2026-05-27`);
       await settle();
 
       assert.ok(result.success);
