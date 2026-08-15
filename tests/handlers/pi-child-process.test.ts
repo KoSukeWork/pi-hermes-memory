@@ -441,13 +441,13 @@ describe("execChildPrompt", () => {
     assert.equal(calls[0].timeout, 35000);
   });
 
-  it("forwards the abort signal to Pi while the watchdog handles cancellation", async () => {
+  it("uses the watchdog marker for cancellation without aborting its process", async () => {
     const abortController = new AbortController();
     let cancelPath = "";
     const result = await execChildPrompt({
       exec: async (_cmd: string, args: string[], options: { signal?: AbortSignal }) => {
         cancelPath = args[2];
-        assert.equal(options.signal, abortController.signal);
+        assert.equal(options.signal, undefined);
         abortController.abort();
         const deadline = Date.now() + 1000;
         while (Date.now() < deadline) {
@@ -469,7 +469,26 @@ describe("execChildPrompt", () => {
     await assert.rejects(fs.access(cancelPath), { code: "ENOENT" });
   });
 
-  it("forwards explicit cwd, signal, and timeout to Pi exec", async () => {
+  it("writes cancellation before launching an already-aborted child", async () => {
+    const abortController = new AbortController();
+    abortController.abort();
+    let cancelPath = "";
+    await execChildPrompt({
+      exec: async (_cmd: string, args: string[], options: { signal?: AbortSignal }) => {
+        cancelPath = args[2];
+        assert.equal(options.signal, undefined);
+        await fs.access(cancelPath);
+        return { code: 143, stderr: "child cancelled" };
+      },
+    } as any, "cancel before launch", {}, {
+      signal: abortController.signal,
+      timeoutMs: 30000,
+    });
+
+    await assert.rejects(fs.access(cancelPath), { code: "ENOENT" });
+  });
+
+  it("forwards explicit cwd and timeout while cancellation stays with the watchdog", async () => {
     const signal = new AbortController().signal;
     let received: { cwd?: string; signal?: AbortSignal; timeout?: number } | undefined;
     await execChildPrompt({
@@ -483,7 +502,7 @@ describe("execChildPrompt", () => {
       timeoutMs: 30000,
     });
 
-    assert.deepStrictEqual(received, { cwd: "/tmp/session", signal, timeout: 35000 });
+    assert.deepStrictEqual(received, { cwd: "/tmp/session", timeout: 35000 });
   });
 
 

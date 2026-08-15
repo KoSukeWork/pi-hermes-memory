@@ -423,17 +423,20 @@ export async function execChildPrompt(
 ): Promise<PiExecResult> {
   const execOptions = {
     cwd: options.cwd,
-    signal: options.signal,
     timeout: options.timeoutMs + WATCHDOG_EXIT_GRACE_MS,
   };
   const temporaryPrompt = await writePromptToTemporaryFile(prompt);
   const promptReference = `@${temporaryPrompt.filePath}`;
   const cancellationPath = join(temporaryPrompt.dir, "cancel");
+  let cancellationRequest: Promise<void> | undefined;
   const requestCancellation = () => {
-    void fs.writeFile(cancellationPath, "", { mode: 0o600 }).catch(() => {});
+    cancellationRequest ??= fs.writeFile(cancellationPath, "", { mode: 0o600 }).catch(() => {});
   };
   options.signal?.addEventListener("abort", requestCancellation, { once: true });
-  if (options.signal?.aborted) requestCancellation();
+  if (options.signal?.aborted) {
+    requestCancellation();
+    await cancellationRequest;
+  }
 
   try {
     try {
