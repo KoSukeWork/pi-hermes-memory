@@ -1019,10 +1019,6 @@ export class DatabaseManager {
    * marker makes the migration versioned and idempotent.
    */
   private migrateFtsTokenizer(db: DatabaseLike): void {
-    const versionRow = db.prepare(
-      'SELECT value FROM extension_metadata WHERE key = ?',
-    ).get(FTS5_TOKENIZER_VERSION_KEY) as { value?: string } | undefined;
-
     const usesTrigram = (tableName: string): boolean => {
       const row = db.prepare(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
@@ -1030,34 +1026,57 @@ export class DatabaseManager {
       return typeof row?.sql === 'string'
         && /\btokenize\s*=\s*['"]trigram['"]/i.test(row.sql);
     };
+    const migrationComplete = (): boolean => {
+      const versionRow = db.prepare(
+        'SELECT value FROM extension_metadata WHERE key = ?',
+      ).get(FTS5_TOKENIZER_VERSION_KEY) as { value?: string } | undefined;
+      return versionRow?.value === FTS5_TOKENIZER_VERSION
+        && usesTrigram('message_fts')
+        && usesTrigram('memory_fts');
+    };
+    const isBusy = (error: unknown): boolean => {
+      const code = error && typeof error === 'object' && 'code' in error
+        ? String(error.code)
+        : '';
+      return code.startsWith('SQLITE_BUSY') || code.startsWith('SQLITE_LOCKED');
+    };
 
-    if (
-      versionRow?.value === FTS5_TOKENIZER_VERSION
-      && usesTrigram('message_fts')
-      && usesTrigram('memory_fts')
-    ) {
-      return;
-    }
+    while (!migrationComplete()) {
+      try {
+        db.exec('BEGIN IMMEDIATE');
+      } catch (error) {
+        // busy_timeout bounds each wait, not the migration. Keep waiting for
+        // the owner of an unbounded FTS rebuild instead of failing startup.
+        if (isBusy(error)) continue;
+        throw error;
+      }
 
-    db.exec('BEGIN IMMEDIATE');
-    try {
-      db.exec(`
-        DROP TABLE IF EXISTS message_fts;
-        DROP TABLE IF EXISTS memory_fts;
-        ${FTS5_TRIGRAM_TABLES.message};
-        ${FTS5_TRIGRAM_TABLES.memory};
-        INSERT INTO message_fts(message_fts) VALUES ('rebuild');
-        INSERT INTO memory_fts(memory_fts) VALUES ('rebuild');
-      `);
-      db.prepare(`
-        INSERT INTO extension_metadata (key, value)
-        VALUES (?, ?)
-        ON CONFLICT(key) DO UPDATE SET value = excluded.value
-      `).run(FTS5_TOKENIZER_VERSION_KEY, FTS5_TOKENIZER_VERSION);
-      db.exec('COMMIT');
-    } catch (error) {
-      try { db.exec('ROLLBACK'); } catch { /* preserve migration error */ }
-      throw error;
+      try {
+        // Another Pi process may have completed the migration while this
+        // connection waited for the write lock.
+        if (migrationComplete()) {
+          db.exec('COMMIT');
+          return;
+        }
+        db.exec(`
+          DROP TABLE IF EXISTS message_fts;
+          DROP TABLE IF EXISTS memory_fts;
+          ${FTS5_TRIGRAM_TABLES.message};
+          ${FTS5_TRIGRAM_TABLES.memory};
+          INSERT INTO message_fts(message_fts) VALUES ('rebuild');
+          INSERT INTO memory_fts(memory_fts) VALUES ('rebuild');
+        `);
+        db.prepare(`
+          INSERT INTO extension_metadata (key, value)
+          VALUES (?, ?)
+          ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        `).run(FTS5_TOKENIZER_VERSION_KEY, FTS5_TOKENIZER_VERSION);
+        db.exec('COMMIT');
+        return;
+      } catch (error) {
+        try { db.exec('ROLLBACK'); } catch { /* preserve migration error */ }
+        throw error;
+      }
     }
   }
 

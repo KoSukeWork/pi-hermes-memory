@@ -957,6 +957,9 @@ export class MemoryStore {
         this.fileFingerprints[filePath] = publishedState.fingerprint;
         throw new ExternalMemoryWriteConflict();
       }
+      // Enforce the cap again after publishing the displaced snapshot. An
+      // individual source file can be larger than the entire recovery budget.
+      await this.pruneRecoveryFiles(filePath);
     } catch (err) {
       try { await fs.unlink(tmpPath); } catch { /* ignore */ }
       throw err;
@@ -1067,7 +1070,7 @@ export class MemoryStore {
         // Reserve room for the snapshot this write will publish.
         const recoveryByteLimit = Math.max(0, RECOVERY_MAX_BYTES - upcomingBytes);
         const withinBytes = recoveryBytes + item.state.size <= recoveryByteLimit;
-        if ((withinGrace || recoveryCount === 0) && withinCount && (withinBytes || recoveryCount === 0)) {
+        if ((withinGrace || recoveryCount === 0) && withinCount && withinBytes) {
           recoveryCount++;
           recoveryBytes += item.state.size;
           continue;

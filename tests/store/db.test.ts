@@ -251,6 +251,47 @@ describe('DatabaseManager', () => {
       );
     });
 
+    it('waits for a concurrent tokenizer migration and rechecks its result under the write lock', () => {
+      let beginAttempts = 0;
+      let commits = 0;
+      let rebuildAttempted = false;
+      const fakeDb = {
+        prepare: (sql: string) => ({
+          get: () => {
+            if (sql.includes('extension_metadata')) {
+              return beginAttempts >= 2 ? { value: 'trigram-v1' } : undefined;
+            }
+            if (sql.includes('sqlite_master')) {
+              return { sql: "CREATE VIRTUAL TABLE x USING fts5(content, tokenize='trigram')" };
+            }
+            return undefined;
+          },
+          run: () => undefined,
+          all: () => [],
+        }),
+        exec: (sql: string) => {
+          if (sql === 'BEGIN IMMEDIATE') {
+            beginAttempts++;
+            if (beginAttempts === 1) {
+              throw Object.assign(new Error('database is busy'), { code: 'SQLITE_BUSY' });
+            }
+          }
+          if (sql.includes('DROP TABLE')) rebuildAttempted = true;
+          if (sql === 'COMMIT') commits++;
+        },
+        close: () => undefined,
+      };
+      const internalManager = dbManager as unknown as {
+        migrateFtsTokenizer(db: typeof fakeDb): void;
+      };
+
+      internalManager.migrateFtsTokenizer(fakeDb);
+
+      assert.strictEqual(beginAttempts, 2);
+      assert.strictEqual(commits, 1);
+      assert.strictEqual(rebuildAttempted, false);
+    });
+
 
     it('should create triggers for FTS sync', () => {
       const db = dbManager.getDb();

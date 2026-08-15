@@ -1701,22 +1701,39 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       );
       assert.equal(retiredContents.some((content) => content.includes("outside sensitive content")), false);
     });
-    it("budgets the displaced recovery snapshot in file bytes", async () => {
+    it("budgets the displaced snapshot and prunes again after publishing it", async () => {
       const store = new MemoryStore(makeConfig());
       await store.loadFromDisk();
       await store.add("memory", `${TEST_MARKER} 记忆 🧠`);
       const displaced = await fs.stat(memoryPath);
-      let upcomingBytes: number | undefined;
+      const upcomingBudgets: number[] = [];
       const instrumentedStore = store as unknown as {
         pruneRecoveryFiles(filePath: string, bytes?: number): Promise<void>;
       };
-      instrumentedStore.pruneRecoveryFiles = async (_filePath, bytes) => {
-        upcomingBytes = bytes;
+      instrumentedStore.pruneRecoveryFiles = async (_filePath, bytes = 0) => {
+        upcomingBudgets.push(bytes);
       };
 
       await store.add("memory", `${TEST_MARKER} next entry`);
 
-      assert.equal(upcomingBytes, displaced.size);
+      assert.deepEqual(upcomingBudgets, [displaced.size, 0]);
+    });
+
+    it("does not retain an active recovery when the upcoming snapshot consumes the byte budget", async () => {
+      const store = new MemoryStore(makeConfig());
+      const internalStore = store as unknown as {
+        recoveryPathFor(filePath: string): string;
+        pruneRecoveryFiles(filePath: string, bytes?: number): Promise<void>;
+      };
+      const recoveryPathFor = internalStore.recoveryPathFor.bind(store);
+      const pruneRecoveryFiles = internalStore.pruneRecoveryFiles.bind(store);
+      const recoveryPath = recoveryPathFor(memoryPath);
+      await writeRaw(recoveryPath, `${TEST_MARKER} newest active recovery`);
+
+      await pruneRecoveryFiles(memoryPath, 64 * 1024 * 1024);
+
+      const activeStillExists = await fs.stat(recoveryPath).then(() => true, () => false);
+      assert.equal(activeStillExists, false);
     });
 
     it("bounds active recovery snapshots by count and bytes while keeping the newest", async () => {

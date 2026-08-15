@@ -739,6 +739,7 @@ describe("execChildPrompt", () => {
     }, {
       timeoutMs: 30000,
       retryWithoutOverrides: true,
+      model: { provider: "local-llama", id: "local-9b" },
     });
 
     assert.strictEqual(result.code, 0);
@@ -747,8 +748,8 @@ describe("execChildPrompt", () => {
     assert.match(promptReference, /^@/);
     assert.deepStrictEqual(logicalCalls, [
       ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, promptReference],
-      // Retry path (basePromptArgs) also passes --no-extensions + own path.
-      ["-p", "--no-session", ...EXT_ARGS, promptReference],
+      // Retry drops configured overrides but preserves the active session model.
+      ["-p", "--no-session", "--model", "local-llama/local-9b", ...EXT_ARGS, promptReference],
     ]);
   });
 

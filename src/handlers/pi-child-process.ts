@@ -273,10 +273,13 @@ export function buildChildPiPromptArgs(
   return args;
 }
 
-function basePromptArgs(prompt: string, config: ChildLlmConfig): string[] {
+function basePromptArgs(prompt: string, config: ChildLlmConfig, activeModel?: ChildPiModel): string[] {
   // Always use --no-extensions + own path so the retry also avoids loading
   // all settings.json packages — matching the primary code path.
   const args = ["-p", "--no-session"];
+  if (activeModel?.provider && activeModel.id) {
+    args.push("--model", `${activeModel.provider}/${activeModel.id}`);
+  }
   appendOwnExtensionArgs(args, config);
   args.push(prompt);
   return args;
@@ -459,7 +462,7 @@ export async function execChildPrompt(
     }
 
     const retryInvocation = resolveWatchedChildPiInvocation(
-      resolveChildPiInvocation(basePromptArgs(promptReference, config)),
+      resolveChildPiInvocation(basePromptArgs(promptReference, config, options.model)),
       options.timeoutMs,
       cancellationPath,
     );
