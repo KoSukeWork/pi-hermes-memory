@@ -279,6 +279,25 @@ describe("buildChildPiPromptArgs", () => {
       ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, "hello"],
     );
   });
+  it("inherits the active provider/model when no override is configured", () => {
+    assert.deepStrictEqual(
+      buildChildPiPromptArgs("hello", {}, [], { provider: "local-llama", id: "local-9b" }),
+      ["-p", "--no-session", "--model", "local-llama/local-9b", ...EXT_ARGS, "hello"],
+    );
+  });
+
+  it("prefers the configured model override over the active session model", () => {
+    assert.deepStrictEqual(
+      buildChildPiPromptArgs(
+        "hello",
+        { llmModelOverride: "openrouter/deepseek/deepseek-v4-flash" },
+        [],
+        { provider: "local-llama", id: "local-9b" },
+      ),
+      ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, "hello"],
+    );
+  });
+
 
   it("allows thinking overrides without a model override", () => {
     assert.deepStrictEqual(
@@ -422,7 +441,7 @@ describe("execChildPrompt", () => {
     assert.equal(calls[0].timeout, 35000);
   });
 
-  it("cancels through the watchdog without forwarding the abort signal to pi.exec", async () => {
+  it("uses the watchdog marker for cancellation without aborting its process", async () => {
     const abortController = new AbortController();
     let cancelPath = "";
     const result = await execChildPrompt({
@@ -449,6 +468,43 @@ describe("execChildPrompt", () => {
     assert.equal(result.code, 143);
     await assert.rejects(fs.access(cancelPath), { code: "ENOENT" });
   });
+
+  it("writes cancellation before launching an already-aborted child", async () => {
+    const abortController = new AbortController();
+    abortController.abort();
+    let cancelPath = "";
+    await execChildPrompt({
+      exec: async (_cmd: string, args: string[], options: { signal?: AbortSignal }) => {
+        cancelPath = args[2];
+        assert.equal(options.signal, undefined);
+        await fs.access(cancelPath);
+        return { code: 143, stderr: "child cancelled" };
+      },
+    } as any, "cancel before launch", {}, {
+      signal: abortController.signal,
+      timeoutMs: 30000,
+    });
+
+    await assert.rejects(fs.access(cancelPath), { code: "ENOENT" });
+  });
+
+  it("forwards explicit cwd and timeout while cancellation stays with the watchdog", async () => {
+    const signal = new AbortController().signal;
+    let received: { cwd?: string; signal?: AbortSignal; timeout?: number } | undefined;
+    await execChildPrompt({
+      exec: async (_cmd: string, _args: string[], options: typeof received) => {
+        received = options;
+        return { code: 0, stdout: "ok", stderr: "" };
+      },
+    } as any, "bounded child", {}, {
+      cwd: "/tmp/session",
+      signal,
+      timeoutMs: 30000,
+    });
+
+    assert.deepStrictEqual(received, { cwd: "/tmp/session", timeout: 35000 });
+  });
+
 
   it("hard-kills a child that ignores graceful timeout termination", async () => {
     const watchdogPath = fileURLToPath(
@@ -702,6 +758,7 @@ describe("execChildPrompt", () => {
     }, {
       timeoutMs: 30000,
       retryWithoutOverrides: true,
+      model: { provider: "local-llama", id: "local-9b" },
     });
 
     assert.strictEqual(result.code, 0);
@@ -710,8 +767,8 @@ describe("execChildPrompt", () => {
     assert.match(promptReference, /^@/);
     assert.deepStrictEqual(logicalCalls, [
       ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, promptReference],
-      // Retry path (basePromptArgs) also passes --no-extensions + own path.
-      ["-p", "--no-session", ...EXT_ARGS, promptReference],
+      // Retry drops configured overrides but preserves the active session model.
+      ["-p", "--no-session", "--model", "local-llama/local-9b", ...EXT_ARGS, promptReference],
     ]);
   });
 

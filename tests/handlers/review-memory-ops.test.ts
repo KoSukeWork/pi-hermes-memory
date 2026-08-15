@@ -65,26 +65,18 @@ describe("buildDirectReviewCompletionOptions", () => {
   });
 });
 
-describe("provider auth freshness", () => {
-  /**
-   * Mirrors AuthStorage: `disk` is auth.json, `loaded` is the in-memory
-   * snapshot, and only reload() copies one onto the other. A rotation tool
-   * rewrites `disk`; a session that never reloads keeps sending `loaded`.
-   */
-  function rotatingRegistry(initialKey: string) {
-    const state = { disk: initialKey, loaded: initialKey, reloads: 0 };
+describe("provider auth resolution", () => {
+  function registryWithAuthResponses(...keys: string[]) {
+    let authCalls = 0;
     const modelRegistry = {
-      authStorage: {
-        reload: () => {
-          state.reloads++;
-          state.loaded = state.disk;
-        },
-      },
-      getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: state.loaded }),
+      getApiKeyAndHeaders: async () => ({
+        ok: true as const,
+        apiKey: keys[Math.min(authCalls++, keys.length - 1)],
+      }),
       getAll: () => [mockModel(false)],
       getAvailable: () => [mockModel(false)],
     };
-    return { state, modelRegistry };
+    return { get authCalls() { return authCalls; }, modelRegistry };
   }
 
   function completionStub(behaviour: (apiKey: string | undefined, attempt: number) => unknown) {
@@ -107,13 +99,12 @@ describe("provider auth freshness", () => {
     return { userPrompt: "u", systemPrompt: "s", config: {} };
   }
 
-  it("re-reads credentials before each completion so a rotated key is picked up", async () => {
-    const { state, modelRegistry } = rotatingRegistry("stale-key");
-    state.disk = "rotated-key";
+  it("resolves credentials through the public registry API", async () => {
+    const registry = registryWithAuthResponses("current-key");
     const { usedKeys, complete } = completionStub(() => emptyOperations);
 
     const result = await runDirectMemoryCompletion(
-      { model: mockModel(false), modelRegistry } as never,
+      { model: mockModel(false), modelRegistry: registry.modelRegistry } as never,
       null as never,
       null,
       directOptions(),
@@ -123,16 +114,14 @@ describe("provider auth freshness", () => {
     );
 
     assert.strictEqual(result.ok, true);
-    assert.strictEqual(state.reloads, 1, "credentials must be re-read, not taken from the startup snapshot");
-    assert.deepStrictEqual(usedKeys, ["rotated-key"], "the stale snapshot key must never reach the provider");
+    assert.strictEqual(registry.authCalls, 1);
+    assert.deepStrictEqual(usedKeys, ["current-key"]);
   });
 
-  it("retries once with the rotated key when the provider rejects the current one", async () => {
-    const { state, modelRegistry } = rotatingRegistry("revoked-key");
+  it("re-resolves credentials after a provider auth rejection", async () => {
+    const { modelRegistry } = registryWithAuthResponses("revoked-key", "rotated-key");
     const { usedKeys, complete } = completionStub((_key, attempt) => {
       if (attempt > 1) return emptyOperations;
-      // Hitting the weekly limit is what triggers the external rotation.
-      state.disk = "rotated-key";
       return new Error("HTTP 401 Unauthorized: invalid api key");
     });
 
@@ -151,7 +140,7 @@ describe("provider auth freshness", () => {
   });
 
   it("does not retry when the refreshed key is the same one the provider rejected", async () => {
-    const { modelRegistry } = rotatingRegistry("only-key");
+    const { modelRegistry } = registryWithAuthResponses("only-key");
     const { usedKeys, complete } = completionStub(() => new Error("HTTP 401 Unauthorized"));
 
     const result = await runDirectMemoryCompletion(
@@ -167,25 +156,6 @@ describe("provider auth freshness", () => {
     assert.strictEqual(result.ok, false);
     assert.strictEqual(result.fallbackReason, "provider_error");
     assert.strictEqual(usedKeys.length, 1, "an unchanged key means a real auth problem, not a rotation race");
-  });
-
-  it("keeps working when reloading the credential file throws", async () => {
-    const { modelRegistry } = rotatingRegistry("only-key");
-    modelRegistry.authStorage.reload = () => { throw new Error("auth.json is not valid JSON"); };
-    const { usedKeys, complete } = completionStub(() => emptyOperations);
-
-    const result = await runDirectMemoryCompletion(
-      { model: mockModel(false), modelRegistry } as never,
-      null as never,
-      null,
-      directOptions(),
-      null,
-      null,
-      { completeSimple: complete as never },
-    );
-
-    assert.strictEqual(result.ok, true);
-    assert.deepStrictEqual(usedKeys, ["only-key"]);
   });
 
   it("classifies provider auth rejections without swallowing other failures", () => {
@@ -317,6 +287,34 @@ describe("applyReviewOperations", () => {
     assert.match(result.error ?? "", /No entry matched 'missing later entry'/);
     assert.deepStrictEqual(store.getMemoryEntries(), beforeEntries);
     assert.strictEqual(await fs.readFile(memoryPath, "utf8"), beforeDisk);
+  });
+
+  it("refuses an atomic review replacement that would discard sibling facts", async () => {
+    const store = new MemoryStore({
+      memoryDir: tmpDir,
+      memoryCharLimit: 5000,
+      userCharLimit: 5000,
+      autoConsolidate: true,
+    });
+    await store.loadFromDisk();
+    await store.add("user", "Name: Cataldo\nOS: Arch Linux\nPreference: concise replies");
+    const beforeDisk = await fs.readFile(path.join(tmpDir, "USER.md"), "utf8");
+
+    const result = await applyReviewOperations(
+      store,
+      null,
+      [{ action: "replace", target: "user", old_text: "Name: Cataldo", content: "Name: Aldo" }],
+      null,
+      null,
+      { requireAtomicShrink: true, expectedTarget: "user" },
+    );
+
+    assert.deepStrictEqual(
+      { appliedCount: result.appliedCount, skippedCount: result.skippedCount },
+      { appliedCount: 0, skippedCount: 1 },
+    );
+    assert.match(result.error ?? "", /Refusing replace/);
+    assert.strictEqual(await fs.readFile(path.join(tmpDir, "USER.md"), "utf8"), beforeDisk);
   });
 
   it("rejects mixed and unexpected atomic targets before mutation", async () => {

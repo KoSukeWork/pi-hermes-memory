@@ -744,6 +744,10 @@ describe("setupBackgroundReview", () => {
 
     assert.strictEqual(directCalls.length, 1, "direct review should run once");
     assert.strictEqual(execCalls.length, 0, "subprocess should not run on successful direct review");
+    const directOptions = directCalls[0][3] as { systemPrompt: string };
+    assert.match(directOptions.systemPrompt, /target routing/i);
+    assert.match(directOptions.systemPrompt, /use target "memory"/i);
+    assert.match(directOptions.systemPrompt, /do not emit target "project"/i);
     const reviewNotify = notifyCalls.find((n) => n.msg.includes("Memory auto-reviewed"));
     assert.ok(reviewNotify, "should notify when direct review applies memory");
   });
@@ -767,6 +771,65 @@ describe("setupBackgroundReview", () => {
     assert.strictEqual(directCalls.length, 1, "direct review should be attempted first");
     assert.strictEqual(execCalls.length, 1, "subprocess should run as fallback");
   });
+  it("inherits the active session model and execution context for subprocess fallback", async () => {
+    const pi = createMockPi();
+    setupWithDirectDeps(pi, { ok: false, appliedCount: 0, fallbackReason: "no_auth" }, {
+      ...defaultConfig,
+      reviewTransport: "direct",
+    });
+
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    const signal = new AbortController().signal;
+    for (let i = 0; i < 10; i++) {
+      fireTurnEnd(makeBranch(10), {
+        cwd: "/tmp/local-session",
+        model: { provider: "local-llama", id: "local-9b" },
+        signal,
+      });
+    }
+    await reviewSettledSignal.promise;
+
+    assert.deepStrictEqual(logicalChildArgs(0).slice(0, 5), [
+      "-p", "--no-session", "--model", "local-llama/local-9b", "--no-extensions",
+    ]);
+    assert.deepStrictEqual(execCalls[0][2], {
+      cwd: "/tmp/local-session",
+      timeout: 125000,
+    });
+  });
+
+  it("surfaces one actionable diagnostic when direct and subprocess review both fail", async () => {
+    const pi = createMockPi({ code: 1, stdout: "", stderr: "No API key for local-llama/local-9b" });
+    setupWithDirectDeps(pi, {
+      ok: false,
+      appliedCount: 0,
+      fallbackReason: "no_auth",
+      error: "No API key for local-llama",
+    }, {
+      ...defaultConfig,
+      reviewTransport: "direct",
+    });
+
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    for (let i = 0; i < 10; i++) {
+      fireTurnEnd(makeBranch(10), {
+        model: { provider: "local-llama", id: "local-9b" },
+      });
+    }
+    await reviewSettledSignal.promise;
+
+    const failures = notifyCalls.filter((n) => n.level === "warning");
+    assert.equal(failures.length, 1);
+    assert.match(failures[0].msg, /both transports/i);
+    assert.match(failures[0].msg, /no_auth/i);
+    assert.match(failures[0].msg, /No API key for local-llama\/local-9b/i);
+    assert.match(failures[0].msg, /llmModelOverride/i);
+  });
+
 
   it("falls back to subprocess when direct review throws", async () => {
     const pi = createMockPi();
@@ -809,6 +872,33 @@ describe("setupBackgroundReview", () => {
     const reviewNotify = notifyCalls.find((n) => n.msg.includes("Memory auto-reviewed"));
     assert.strictEqual(reviewNotify, undefined, "empty direct review should not notify");
     assert.strictEqual(execCalls.length, 0, "empty direct review should not fall back");
+  });
+
+  it("includes explicit target routing for an available project store", () => {
+    const prompt = buildSubprocessReviewPrompt({
+      parts: ["[USER] hello", "[ASSISTANT] hi"],
+      currentMemory: "global fact",
+      currentUser: "user preference",
+      currentProject: "project convention",
+    });
+
+    assert.match(prompt, /project-specific facts.*target "project"/i);
+    assert.match(prompt, /global or cross-project facts.*target "memory"/i);
+    assert.match(prompt, /failures, corrections.*target "failure"/i);
+  });
+
+  it("keeps project target unavailable when no project store is present", () => {
+    const prompt = buildSubprocessReviewPrompt({
+      parts: ["[USER] hello", "[ASSISTANT] hi"],
+      currentMemory: "global fact",
+      currentUser: "user preference",
+      currentProject: null,
+    });
+
+    assert.match(prompt, /do not emit target "project"/i);
+    assert.match(prompt, /use target "memory"/i);
+    assert.match(prompt, /target "failure"/i);
+    assert.doesNotMatch(prompt, /--- Current Project Memory ---/i);
   });
 
   it("builds separate prompts for direct and subprocess transports", () => {

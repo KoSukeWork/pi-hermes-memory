@@ -204,6 +204,111 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       assert.equal(consolidatorCalled, false);
       assert.ok(result.error!.includes("exceed the limit"));
     });
+    it("defers auto-consolidation during the per-target overflow grace window", async () => {
+      let consolidatorCalls = 0;
+      const store = new MemoryStore(makeConfig({
+        memoryCharLimit: 180,
+        memoryOverflowStrategy: "auto-consolidate",
+        autoConsolidate: true,
+        overflowGraceMs: 60_000,
+      }));
+      store.setConsolidator(async () => {
+        consolidatorCalls++;
+        return { consolidated: true };
+      });
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} ${"seed".repeat(12)}`);
+
+      const firstOverflow = await store.add("memory", `${TEST_MARKER} ${"incoming".repeat(20)}`);
+      const secondOverflow = await store.add("memory", `${TEST_MARKER} ${"incoming-again".repeat(20)}`);
+
+      assert.equal(firstOverflow.success, false);
+      assert.equal(secondOverflow.success, false);
+      assert.equal(consolidatorCalls, 0);
+      assert.match(firstOverflow.error ?? "", /deferred/);
+      assert.match(secondOverflow.error ?? "", /deferred/);
+    });
+
+    it("runs auto-consolidation after the original overflow grace expires", async (t) => {
+      const originalNow = Date.now;
+      let now = originalNow();
+      Date.now = () => now;
+      t.after(() => {
+        Date.now = originalNow;
+      });
+      let consolidatorCalls = 0;
+      const store = new MemoryStore(makeConfig({
+        memoryCharLimit: 180,
+        memoryOverflowStrategy: "auto-consolidate",
+        autoConsolidate: true,
+        overflowGraceMs: 60_000,
+      }));
+      store.setConsolidator(async () => {
+        consolidatorCalls++;
+        return { consolidated: false, error: "test consolidation" };
+      });
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} ${"seed".repeat(12)}`);
+
+      await store.add("memory", `${TEST_MARKER} ${"incoming".repeat(20)}`);
+      now += 60_001;
+      const retried = await store.add("memory", `${TEST_MARKER} ${"incoming".repeat(20)}`);
+
+      assert.equal(consolidatorCalls, 1);
+      assert.match(retried.error ?? "", /test consolidation/);
+    });
+
+    it("does not restart expired overflow grace after a duplicate add", async (t) => {
+      const originalNow = Date.now;
+      let now = originalNow();
+      Date.now = () => now;
+      t.after(() => {
+        Date.now = originalNow;
+      });
+      let consolidatorCalls = 0;
+      const store = new MemoryStore(makeConfig({
+        memoryCharLimit: 180,
+        memoryOverflowStrategy: "auto-consolidate",
+        autoConsolidate: true,
+        overflowGraceMs: 60_000,
+      }));
+      store.setConsolidator(async () => {
+        consolidatorCalls++;
+        return { consolidated: false, error: "test consolidation" };
+      });
+      await store.loadFromDisk();
+      const seed = `${TEST_MARKER} ${"seed".repeat(12)}`;
+      await store.add("memory", seed);
+      await store.add("memory", `${TEST_MARKER} ${"incoming".repeat(20)}`);
+      now += 60_001;
+
+      assert.equal((await store.add("memory", seed)).success, true);
+      await store.add("memory", `${TEST_MARKER} ${"incoming".repeat(20)}`);
+
+      assert.equal(consolidatorCalls, 1);
+    });
+
+    it("clears overflow grace after a successful manual write", async () => {
+      let consolidatorCalls = 0;
+      const store = new MemoryStore(makeConfig({
+        memoryCharLimit: 180,
+        memoryOverflowStrategy: "auto-consolidate",
+        autoConsolidate: true,
+        overflowGraceMs: 60_000,
+      }));
+      store.setConsolidator(async () => {
+        consolidatorCalls++;
+        return { consolidated: false };
+      });
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} ${"seed".repeat(12)}`);
+      assert.equal((await store.add("memory", `${TEST_MARKER} ${"incoming".repeat(20)}`)).success, false);
+
+      const manual = await store.replace("memory", `${TEST_MARKER}`, `${TEST_MARKER} compact`);
+      assert.equal(manual.success, true);
+      assert.equal((await store.add("memory", `${TEST_MARKER} ${"incoming-again".repeat(20)}`)).success, false);
+      assert.equal(consolidatorCalls, 0);
+    });
 
     it("evicts oldest entries in file order when memoryOverflowStrategy is fifo-evict", async () => {
       let consolidatorCalled = false;
@@ -454,6 +559,33 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       const raw = await readRaw(memoryPath);
       assert.ok(!raw.includes(`${TEST_MARKER} uses vim`));
       assert.ok(raw.includes(`${TEST_MARKER} uses neovim`));
+    });
+    it("refuses fragment replacement that would discard sibling facts", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("user", "Name: Cataldo\nOS: Arch Linux\nPreference: concise replies");
+
+      const refused = await store.replace("user", "Name: Cataldo", "Name: Aldo");
+
+      assert.equal(refused.success, false);
+      assert.match(refused.error ?? "", /Refusing replace/);
+      assert.ok(store.getUserEntries().some((entry) => entry.includes("Arch Linux")));
+    });
+
+    it("strips metadata from multiline entries and accepts a full replacement", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("user", "Name: Cataldo\nOS: Arch Linux\nPreference: concise replies");
+
+      const replaced = await store.replace(
+        "user",
+        "Name: Cataldo",
+        "Name: Aldo\nOS: Arch Linux\nPreference: concise replies",
+      );
+
+      assert.equal(replaced.success, true);
+      assert.deepEqual(store.getUserEntries(), ["Name: Aldo\nOS: Arch Linux\nPreference: concise replies"]);
+      assert.match(await readRaw(userPath), /created=.*last=/);
     });
 
     it("returns error when no match found", async () => {
@@ -717,9 +849,9 @@ describe("MemoryStore", { concurrency: 1 }, () => {
 
       const result = store.formatForSystemPrompt();
       assert.ok(result.includes("RECENT FAILURES & LESSONS"));
-      assert.ok(result.includes(`${TEST_MARKER} failure 1`));
-      assert.ok(result.includes(`${TEST_MARKER} failure 5`));
-      assert.ok(!result.includes(`${TEST_MARKER} failure 6`), "default should preserve existing first-5 slice behavior");
+      assert.ok(!result.includes(`${TEST_MARKER} failure 1`));
+      assert.ok(result.includes(`${TEST_MARKER} failure 2`));
+      assert.ok(result.includes(`${TEST_MARKER} failure 6`));
     });
 
     it("does not inject failure memories when disabled", async () => {
@@ -746,9 +878,19 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       await store.loadFromDisk();
 
       const result = store.formatForSystemPrompt();
-      assert.ok(result.includes(`${TEST_MARKER} max entry 1`));
+      assert.ok(!result.includes(`${TEST_MARKER} max entry 1`));
       assert.ok(result.includes(`${TEST_MARKER} max entry 2`));
-      assert.ok(!result.includes(`${TEST_MARKER} max entry 3`));
+      assert.ok(result.includes(`${TEST_MARKER} max entry 3`));
+    });
+
+    it("injects no failure memories when max entries is zero", async () => {
+      await writeRaw(failurePath, failureEntry(`${TEST_MARKER} excluded failure`));
+      const store = new MemoryStore(makeConfig({ failureInjectionMaxEntries: 0 }));
+      await store.loadFromDisk();
+
+      const result = store.formatForSystemPrompt();
+      assert.ok(!result.includes("RECENT FAILURES & LESSONS"));
+      assert.ok(!result.includes(`${TEST_MARKER} excluded failure`));
     });
 
     it("respects configured failure injection max age days", async () => {
@@ -976,6 +1118,22 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       assert.match(result.error ?? "", /No entry matched 'missing entry'/);
       assert.equal(await readRaw(memoryPath), beforeDisk);
       assert.deepEqual((store as any).memoryEntries, beforeEntries);
+    });
+
+    it("refuses an atomic fragment replacement that would discard sibling facts", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("user", "Name: Cataldo\nOS: Arch Linux\nPreference: concise replies");
+      const beforeDisk = await readRaw(userPath);
+
+      const result = await store.applyMutationPlan("user", [
+        { action: "replace", oldText: "Name: Cataldo", content: "Name: Aldo" },
+      ]);
+
+      assert.equal(result.success, false);
+      assert.match(result.error ?? "", /Refusing replace/);
+      assert.equal(await readRaw(userPath), beforeDisk);
+      assert.ok(store.getUserEntries().some((entry) => entry.includes("Arch Linux")));
     });
 
     it("rejects invalid plans before publishing any draft", async () => {
@@ -1558,6 +1716,71 @@ describe("MemoryStore", { concurrency: 1 }, () => {
         retiredFiles.map((name) => fs.readFile(path.join(MEMORY_DIR, name), "utf-8")),
       );
       assert.equal(retiredContents.some((content) => content.includes("outside sensitive content")), false);
+    });
+    it("budgets the displaced snapshot and prunes again after publishing it", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} 记忆 🧠`);
+      const displaced = await fs.stat(memoryPath);
+      const upcomingBudgets: number[] = [];
+      const instrumentedStore = store as unknown as {
+        pruneRecoveryFiles(filePath: string, bytes?: number): Promise<void>;
+      };
+      instrumentedStore.pruneRecoveryFiles = async (_filePath, bytes = 0) => {
+        upcomingBudgets.push(bytes);
+      };
+
+      await store.add("memory", `${TEST_MARKER} next entry`);
+
+      assert.deepEqual(upcomingBudgets, [displaced.size, 0]);
+    });
+
+    it("does not retain an active recovery when the upcoming snapshot consumes the byte budget", async () => {
+      const store = new MemoryStore(makeConfig());
+      const internalStore = store as unknown as {
+        recoveryPathFor(filePath: string): string;
+        pruneRecoveryFiles(filePath: string, bytes?: number): Promise<void>;
+      };
+      const recoveryPathFor = internalStore.recoveryPathFor.bind(store);
+      const pruneRecoveryFiles = internalStore.pruneRecoveryFiles.bind(store);
+      const recoveryPath = recoveryPathFor(memoryPath);
+      await writeRaw(recoveryPath, `${TEST_MARKER} newest active recovery`);
+
+      await pruneRecoveryFiles(memoryPath, 64 * 1024 * 1024);
+
+      const activeStillExists = await fs.stat(recoveryPath).then(() => true, () => false);
+      assert.equal(activeStillExists, false);
+    });
+
+    it("bounds active recovery snapshots by count and bytes while keeping the newest", async () => {
+      const pathStore = new MemoryStore(makeConfig());
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} recovery seed`);
+
+      const recoveryPathFor = (pathStore as unknown as { recoveryPathFor(filePath: string): string }).recoveryPathFor.bind(pathStore);
+      for (let index = 0; index < 40; index++) {
+        const recoveryPath = recoveryPathFor(memoryPath);
+        await writeRaw(recoveryPath, `${TEST_MARKER} active recovery ${index}`);
+      }
+
+      await store.add("memory", `${TEST_MARKER} triggers active recovery pruning`);
+
+      const siblings = await fs.readdir(MEMORY_DIR);
+      const recoveryFiles = siblings.filter((name) => name.startsWith(`.${MEMORY_FILE}.recovery-`));
+      const recoveryEntries = await Promise.all(
+        recoveryFiles.map(async (name) => ({
+          name,
+          state: await fs.lstat(path.join(MEMORY_DIR, name)),
+        })),
+      );
+      const regularRecoveryFiles = recoveryEntries.filter(({ state }) => state.isFile());
+      const recoveryStats = await Promise.all(
+        regularRecoveryFiles.map(({ name }) => fs.stat(path.join(MEMORY_DIR, name))),
+      );
+      assert.ok(regularRecoveryFiles.length <= 32);
+      assert.ok(recoveryStats.reduce((total, stat) => total + stat.size, 0) <= 64 * 1024 * 1024);
+      assert.ok(recoveryFiles.length > 0);
     });
 
     it("bounds retired recovery snapshots by age, count, and bytes", async () => {

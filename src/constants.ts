@@ -29,6 +29,8 @@ export const DEFAULT_FLUSH_RECENT_MESSAGES = 0;
  * including lower ones; `loadConfig` warns when a value below this is set.
  */
 export const DEFAULT_CONSOLIDATION_TIMEOUT_MS = 180000;
+/** Wall-clock grace after overflow before an automatic consolidation may run. */
+export const DEFAULT_OVERFLOW_GRACE_MS = 180000;
 export const DEFAULT_FAILURE_INJECTION_MAX_AGE_DAYS = 7;
 export const DEFAULT_FAILURE_INJECTION_MAX_ENTRIES = 5;
 
@@ -150,6 +152,21 @@ TOOLS:
 - memory_replace requires target, old_text, and content.
 - memory_remove requires target and old_text.
 - Use the action-specific tool that matches the requested mutation.`;
+// ─── Shared memory target routing guidance ───
+// Review, flush, and correction prompts all inspect the same set of stores.
+// Keep the routing rule in one place so direct and subprocess transports do
+// not silently disagree about where a durable fact belongs.
+export function buildMemoryTargetRoutingGuidance(hasProjectStore: boolean): string {
+  const projectRule = hasProjectStore
+    ? '- Project-specific facts, conventions, and workflows: use target "project" (the current project memory section is available).'
+    : '- No current project memory section is available: do not emit target "project"; use target "memory" for non-user, non-failure facts.';
+
+  return `**Target routing**:
+- User identity, preferences, and profile facts: use target "user".
+- Global or cross-project facts: use target "memory".
+${projectRule}
+- Failures, corrections, insights, and tool quirks: use target "failure" (keep these categorized as failure memories; do not reroute them to project or global memory).`;
+}
 
 // ─── Background review prompt (ported from _COMBINED_REVIEW_PROMPT in run_agent.py ~L2855) ───
 export const COMBINED_REVIEW_PROMPT = `Review the conversation above and consider these aspects:

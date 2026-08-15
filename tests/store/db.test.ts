@@ -182,6 +182,147 @@ describe('DatabaseManager', () => {
       assert.ok(tableNames.includes('message_fts'), 'message_fts table missing');
       assert.ok(tableNames.includes('memory_fts'), 'memory_fts table missing');
     });
+    it('rebuilds existing unicode61 FTS tables and preserves indexed data', () => {
+      const db = dbManager.getDb();
+      db.prepare(`
+        INSERT INTO sessions (id, project, cwd, started_at)
+        VALUES (?, ?, ?, ?)
+      `).run('cjk-session', 'test-project', '/tmp/test-project', '2026-05-03T00:00:00Z');
+      db.prepare(`
+        INSERT INTO messages (id, session_id, role, content, timestamp)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(
+        'cjk-message',
+        'cjk-session',
+        'assistant',
+        '设备清单包含 NAS',
+        '2026-05-03T00:01:00Z',
+      );
+      db.prepare(`
+        INSERT INTO memories (project, target, content, created, last_referenced)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(
+        'test-project',
+        'memory',
+        '设备清单包含 NAS',
+        '2026-05-03',
+        '2026-05-03',
+      );
+
+      db.exec(`
+        DROP TABLE message_fts;
+        DROP TABLE memory_fts;
+        CREATE VIRTUAL TABLE message_fts USING fts5(
+          content,
+          content='messages',
+          content_rowid='rowid'
+        );
+        CREATE VIRTUAL TABLE memory_fts USING fts5(
+          content,
+          content='memories',
+          content_rowid='id'
+        );
+        INSERT INTO message_fts(message_fts) VALUES ('rebuild');
+        INSERT INTO memory_fts(memory_fts) VALUES ('rebuild');
+        DELETE FROM extension_metadata WHERE key = 'fts5_tokenizer_version';
+      `);
+      dbManager.close();
+
+      dbManager = new DatabaseManager(tmpDir);
+      const migrated = dbManager.getDb();
+      const tableSql = migrated.prepare(`
+        SELECT name, sql
+        FROM sqlite_master
+        WHERE type = 'table' AND name IN ('message_fts', 'memory_fts')
+        ORDER BY name
+      `).all() as Array<{ name: string; sql: string }>;
+
+      assert.strictEqual(tableSql.length, 2);
+      assert.ok(tableSql.every((table) => table.sql.includes("tokenize='trigram'")));
+      assert.deepStrictEqual(
+        migrated.prepare('SELECT value FROM extension_metadata WHERE key = ?').get('fts5_tokenizer_version'),
+        { value: 'trigram-v1' },
+      );
+      assert.ok(
+        migrated.prepare('SELECT rowid FROM message_fts WHERE message_fts MATCH ?').all('设备清单').length > 0,
+      );
+      assert.ok(
+        migrated.prepare('SELECT rowid FROM memory_fts WHERE memory_fts MATCH ?').all('设备清单').length > 0,
+      );
+    });
+
+    it('waits for a concurrent tokenizer migration and rechecks its result under the write lock', () => {
+      let beginAttempts = 0;
+      let commits = 0;
+      let rebuildAttempted = false;
+      const fakeDb = {
+        prepare: (sql: string) => ({
+          get: () => {
+            if (sql.includes('extension_metadata')) {
+              return beginAttempts >= 2 ? { value: 'trigram-v1' } : undefined;
+            }
+            if (sql.includes('sqlite_master')) {
+              return { sql: "CREATE VIRTUAL TABLE x USING fts5(content, tokenize='trigram')" };
+            }
+            return undefined;
+          },
+          run: () => undefined,
+          all: () => [],
+        }),
+        exec: (sql: string) => {
+          if (sql === 'BEGIN IMMEDIATE') {
+            beginAttempts++;
+            if (beginAttempts === 1) {
+              throw Object.assign(new Error('database is busy'), { code: 'SQLITE_BUSY' });
+            }
+          }
+          if (sql.includes('DROP TABLE')) rebuildAttempted = true;
+          if (sql === 'COMMIT') commits++;
+        },
+        close: () => undefined,
+      };
+      const internalManager = dbManager as unknown as {
+        migrateFtsTokenizer(db: typeof fakeDb): void;
+      };
+
+      internalManager.migrateFtsTokenizer(fakeDb);
+
+      assert.strictEqual(beginAttempts, 2);
+      assert.strictEqual(commits, 1);
+      assert.strictEqual(rebuildAttempted, false);
+    });
+
+    it('fails startup with an actionable error when the tokenizer migration lock remains held', () => {
+      let beginAttempts = 0;
+      const fakeDb = {
+        prepare: (sql: string) => ({
+          get: () => {
+            if (sql.includes('extension_metadata')) return undefined;
+            if (sql.includes('sqlite_master')) return { sql: "CREATE VIRTUAL TABLE x USING fts5(content)" };
+            return undefined;
+          },
+          run: () => undefined,
+          all: () => [],
+        }),
+        exec: (sql: string) => {
+          if (sql === 'BEGIN IMMEDIATE') {
+            beginAttempts++;
+            throw Object.assign(new Error('database is busy'), { code: 'SQLITE_BUSY' });
+          }
+        },
+        close: () => undefined,
+      };
+      const internalManager = dbManager as unknown as {
+        migrateFtsTokenizer(db: typeof fakeDb): void;
+      };
+
+      assert.throws(
+        () => internalManager.migrateFtsTokenizer(fakeDb),
+        /Timed out waiting for the FTS tokenizer migration lock/i,
+      );
+      assert.strictEqual(beginAttempts, 3);
+    });
+
 
     it('should create triggers for FTS sync', () => {
       const db = dbManager.getDb();
@@ -350,6 +491,15 @@ describe('DatabaseManager', () => {
       assert.strictEqual(rows.length, 2);
       assert.strictEqual(rows[0].content, 'existing memory');
       assert.strictEqual(rows[1].target, 'failure');
+
+      const indexes = migratedDb.prepare(`
+        SELECT name FROM sqlite_master
+        WHERE type = 'index' AND name IN ('idx_memories_project', 'idx_memories_target', 'idx_memories_category')
+      `).all() as Array<{ name: string }>;
+      assert.deepStrictEqual(
+        indexes.map((row) => row.name).sort(),
+        ['idx_memories_category', 'idx_memories_project', 'idx_memories_target'],
+      );
 
       migratedManager.close();
     });
@@ -720,7 +870,7 @@ describe('DatabaseManager', () => {
 
       assert.strictEqual(dbManager.getLastRecovery()?.strategy, 'rebuilt');
       assert.deepStrictEqual(dbManager.getLastRecovery()?.recoveredRows, {
-        extension_metadata: 0,
+        extension_metadata: 1,
         sessions: 1,
         messages: 50,
         session_files: 0,

@@ -12,6 +12,7 @@ import {
   DEFAULT_REVIEW_RECENT_MESSAGES,
   DEFAULT_FLUSH_RECENT_MESSAGES,
   DEFAULT_CONSOLIDATION_TIMEOUT_MS,
+  DEFAULT_OVERFLOW_GRACE_MS,
   DEFAULT_FAILURE_INJECTION_MAX_AGE_DAYS,
   DEFAULT_FAILURE_INJECTION_MAX_ENTRIES,
 } from "./constants.js";
@@ -53,6 +54,7 @@ const DEFAULT_CONFIG: MemoryConfig = {
   flushMinTurns: DEFAULT_FLUSH_MIN_TURNS,
   flushRecentMessages: DEFAULT_FLUSH_RECENT_MESSAGES,
   memoryOverflowStrategy: "auto-consolidate",
+  overflowGraceMs: DEFAULT_OVERFLOW_GRACE_MS,
   autoConsolidate: true,
   correctionDetection: true,
   failureInjectionEnabled: true,
@@ -112,6 +114,7 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
         config.memoryOverflowStrategy = parsed.memoryOverflowStrategy;
         hasMemoryOverflowStrategy = true;
       }
+      if (isNonNegativeNumber(parsed.overflowGraceMs)) config.overflowGraceMs = parsed.overflowGraceMs;
       if (typeof parsed.correctionDetection === "boolean") config.correctionDetection = parsed.correctionDetection;
       if (isStringArray(parsed.correctionStrongPatterns)) config.correctionStrongPatterns = parsed.correctionStrongPatterns;
       if (isStringArray(parsed.correctionWeakPatterns)) config.correctionWeakPatterns = parsed.correctionWeakPatterns;

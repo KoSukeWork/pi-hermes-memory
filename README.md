@@ -339,6 +339,7 @@ Search behavior notes:
 - Multi-word natural-language queries are supported for both `memory_search` and `session_search`.
 - Exact phrases can be requested with quotes, for example `"memory search"`.
 - Advanced FTS queries with operators like `OR` still work when you need them.
+- FTS5 uses the trigram tokenizer so pure CJK substrings are searchable; one- and two-character `memory_search` queries do not match the trigram index.
 
 Session history is indexed automatically during the active session and on session shutdown. Startup also runs a bounded incremental backfill for missed sessions: it compares stored file metadata and only parses files without matching metadata, capped per startup. To bulk-import existing sessions manually:
 
@@ -508,6 +509,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
   "failureInjectionMaxAgeDays": 7,
   "failureInjectionMaxEntries": 5,
   "consolidationTimeoutMs": 180000,
+  "overflowGraceMs": 180000,
   "autoConsolidationWarnOnFailure": true,
   "flushOnCompact": true,
   "flushOnShutdown": true,
@@ -540,6 +542,7 @@ Create `~/.pi/agent/hermes-memory-config.json`:
 | `memoryOverflowStrategy` | `auto-consolidate` | Behavior when MEMORY.md, USER.md, failures.md, or project-scoped memory reaches its character limit: `auto-consolidate` runs the existing consolidation flow; `reject` returns an error; `fifo-evict` rotates older entries in file order until the new entry fits |
 | `autoConsolidate` | `true` | Legacy alias for `memoryOverflowStrategy` when `memoryOverflowStrategy` is not set (`true` = `auto-consolidate`, `false` = `reject`) |
 | `consolidationTimeoutMs` | `180000` | Maximum time in milliseconds for a consolidation run (auto and `/memory-consolidate` alike). Configured values are used verbatim; a consolidation pays child-process boot plus a full LLM turn, so values below the default are frequently killed mid-run and log a warning at startup |
+| `overflowGraceMs` | `180000` | Wall-clock grace period after a memory overflow before automatic consolidation is retried; this gives the active agent time to consolidate manually. Set to `0` to disable the grace period |
 | `autoConsolidationWarnOnFailure` | `true` | Log failed automatic consolidation attempts to the session console. Set to `false` to suppress only this warning; the memory tool result still reports the failure reason |
 | `correctionDetection` | `true` | Detect user corrections and save immediately |
 | `correctionStrongPatterns` | unset | Optional case-insensitive regex sources replacing strong correction patterns; omitted preserves defaults, invalid entries are ignored |
@@ -587,6 +590,7 @@ If you are upgrading from a version that stored project memory directly at `~/.p
 The `sessions.db` SQLite database stores session history and extended memory entries. It's searchable via FTS5 full-text search.
 
 ## Known Limitations
+- **CJK search length**: The trigram tokenizer supports CJK substring search for terms of three or more characters. One- and two-character `memory_search` terms may need a longer phrase or an English/ASCII token.
 
 - **`§` delimiter**: Memory entries are separated by `§` (section sign). If an entry naturally contains `§`, it will be split incorrectly on reload. This is rare in English text but possible. [Hermes uses the same delimiter.]
 - **Background review cost**: Each review cycle costs one full LLM API call via a child `pi -p` process. Correction detection and explicit skill saves can add additional calls when the agent decides they are worth it.

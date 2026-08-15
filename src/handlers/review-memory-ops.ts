@@ -153,29 +153,14 @@ export type ResolvedRequestAuth =
   | { ok: false; error: string };
 
 /**
- * Resolve request auth against credentials re-read from disk.
- *
- * Pi's AuthStorage parses auth.json once in its constructor and only reloads
- * it when an OAuth refresh fails, and ExtensionRunner hands every event the
- * same ModelRegistry singleton — so an api_key credential is effectively
- * frozen for the process lifetime. A key rotated on disk by another tool
- * (e.g. @lnilluv/pi-opencode-go-rotation swapping an opencode-go subscription
- * key after a weekly limit) stays invisible to this session, and every direct
- * memory completion keeps presenting the revoked key (#139).
- *
- * reload() is public and is a synchronous re-read of that one file, so pay it
- * per completion — a handful per session — instead of caching a key forever.
+ * Resolve request auth through the public ModelRegistry API. Resolve it again
+ * after an auth rejection so Pi can supply refreshed credentials when its
+ * registry supports that, without reaching into version-sensitive internals.
  */
-export async function resolveFreshRequestAuth(
+export async function resolveRequestAuth(
   modelRegistry: ReviewModelRegistry,
   model: Model<Api>,
 ): Promise<ResolvedRequestAuth> {
-  try {
-    modelRegistry.authStorage?.reload();
-  } catch {
-    // A malformed or unreadable auth.json must not take the review path down;
-    // fall through to whatever credentials are already loaded.
-  }
   return modelRegistry.getApiKeyAndHeaders(model);
 }
 
@@ -427,7 +412,7 @@ export async function runDirectMemoryCompletion(
     return { ok: false, appliedCount: 0, fallbackReason: "no_model" };
   }
 
-  const auth = await resolveFreshRequestAuth(ctx.modelRegistry, model);
+  const auth = await resolveRequestAuth(ctx.modelRegistry, model);
   if (!auth.ok || !auth.apiKey) {
     return {
       ok: false,
@@ -467,10 +452,10 @@ export async function runDirectMemoryCompletion(
       if (controller.signal.aborted || !isAuthRejection(message)) throw err;
 
       // The provider rejected the key mid-flight. A rotation tool may have
-      // written a new one since we resolved auth; re-read and retry once, but
-      // only if the key actually changed — otherwise this is a real auth
-      // problem and the subprocess fallback should handle it (#139).
-      const rotated = await resolveFreshRequestAuth(ctx.modelRegistry, model);
+      // re-resolve through Pi and retry once only if it returns a different
+      // key; otherwise this is a real auth problem and the subprocess
+      // fallback should handle it (#139).
+      const rotated = await resolveRequestAuth(ctx.modelRegistry, model);
       if (!rotated.ok || !rotated.apiKey || rotated.apiKey === requestAuth.apiKey) throw err;
 
       requestAuth = { apiKey: rotated.apiKey, headers: rotated.headers, env: rotated.env };

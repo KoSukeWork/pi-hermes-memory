@@ -72,6 +72,24 @@ class DatabaseCorruptionError extends Error {
 
 export const SQLITE_BUSY_TIMEOUT_MS = 5000;
 export const SQLITE_WAL_AUTOCHECKPOINT_PAGES = 1000;
+export const FTS5_MIGRATION_MAX_LOCK_ATTEMPTS = 3;
+
+const FTS5_TOKENIZER_VERSION_KEY = 'fts5_tokenizer_version';
+const FTS5_TOKENIZER_VERSION = 'trigram-v1';
+const FTS5_TRIGRAM_TABLES = {
+  message: `CREATE VIRTUAL TABLE message_fts USING fts5(
+    content,
+    content='messages',
+    content_rowid='rowid',
+    tokenize='trigram'
+  )`,
+  memory: `CREATE VIRTUAL TABLE memory_fts USING fts5(
+    content,
+    content='memories',
+    content_rowid='id',
+    tokenize='trigram'
+  )`,
+} as const;
 
 const DATABASE_FILE_SUFFIXES: readonly DatabaseFileSuffix[] = ['', '-wal', '-shm'];
 const MEMORY_TARGETS = new Set(['memory', 'user', 'failure']);
@@ -326,7 +344,10 @@ export class DatabaseManager {
     // CHECK(target IN ('memory','user')) constraints to include 'failure'.
     this.ensureLegacySchemaColumns(db);
     this.migrateLegacyMemoriesTargetConstraint(db);
-    this.rebuildMemoryFts(db);
+    // Recreate indexes after any legacy table replacement. `DROP TABLE`
+    // removes indexes attached to the old memories table.
+    this.ensureMemoryIndexes(db);
+    this.migrateFtsTokenizer(db);
   }
 
   private hasExistingMainDatabaseFile(): boolean {
@@ -901,6 +922,14 @@ export class DatabaseManager {
       update.run(project, row.id);
     }
   }
+  private ensureMemoryIndexes(db: DatabaseLike): void {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project);
+      CREATE INDEX IF NOT EXISTS idx_memories_target ON memories(target);
+      CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category);
+    `);
+  }
+
 
   private migrateLegacyMemoriesTargetConstraint(db: DatabaseLike): void {
     const tableSqlRow = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='memories'").get() as { sql?: string } | undefined;
@@ -982,12 +1011,82 @@ export class DatabaseManager {
     }
   }
 
-  private rebuildMemoryFts(db: DatabaseLike): void {
-    const ftsTable = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='memory_fts'").get() as { name?: string } | undefined;
-    if (!ftsTable) return;
+  /**
+   * Upgrade existing unicode61 FTS tables to the trigram tokenizer.
+   *
+   * `CREATE VIRTUAL TABLE IF NOT EXISTS` cannot change an existing FTS
+   * tokenizer, so this migration drops and recreates both external-content
+   * indexes, then repopulates them from their source tables. The metadata
+   * marker makes the migration versioned and idempotent.
+   */
+  private migrateFtsTokenizer(db: DatabaseLike): void {
+    const usesTrigram = (tableName: string): boolean => {
+      const row = db.prepare(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+      ).get(tableName) as { sql?: string } | undefined;
+      return typeof row?.sql === 'string'
+        && /\btokenize\s*=\s*['"]trigram['"]/i.test(row.sql);
+    };
+    const migrationComplete = (): boolean => {
+      const versionRow = db.prepare(
+        'SELECT value FROM extension_metadata WHERE key = ?',
+      ).get(FTS5_TOKENIZER_VERSION_KEY) as { value?: string } | undefined;
+      return versionRow?.value === FTS5_TOKENIZER_VERSION
+        && usesTrigram('message_fts')
+        && usesTrigram('memory_fts');
+    };
+    const isBusy = (error: unknown): boolean => {
+      const code = error && typeof error === 'object' && 'code' in error
+        ? String(error.code)
+        : '';
+      return code.startsWith('SQLITE_BUSY') || code.startsWith('SQLITE_LOCKED');
+    };
 
-    // Keep FTS index consistent after table rebuild/migrations.
-    db.exec("INSERT INTO memory_fts(memory_fts) VALUES('rebuild')");
+    let lockAttempts = 0;
+    while (!migrationComplete()) {
+      try {
+        db.exec('BEGIN IMMEDIATE');
+      } catch (error) {
+        // Each attempt waits up to busy_timeout. Cap the total attempts so a
+        // permanently held writer cannot hang extension startup forever.
+        if (isBusy(error) && ++lockAttempts < FTS5_MIGRATION_MAX_LOCK_ATTEMPTS) continue;
+        if (isBusy(error)) {
+          throw new Error(
+            `Timed out waiting for the FTS tokenizer migration lock after ${lockAttempts} attempts. `
+              + "Close the other Pi process and retry.",
+            { cause: error },
+          );
+        }
+        throw error;
+      }
+
+      try {
+        // Another Pi process may have completed the migration while this
+        // connection waited for the write lock.
+        if (migrationComplete()) {
+          db.exec('COMMIT');
+          return;
+        }
+        db.exec(`
+          DROP TABLE IF EXISTS message_fts;
+          DROP TABLE IF EXISTS memory_fts;
+          ${FTS5_TRIGRAM_TABLES.message};
+          ${FTS5_TRIGRAM_TABLES.memory};
+          INSERT INTO message_fts(message_fts) VALUES ('rebuild');
+          INSERT INTO memory_fts(memory_fts) VALUES ('rebuild');
+        `);
+        db.prepare(`
+          INSERT INTO extension_metadata (key, value)
+          VALUES (?, ?)
+          ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        `).run(FTS5_TOKENIZER_VERSION_KEY, FTS5_TOKENIZER_VERSION);
+        db.exec('COMMIT');
+        return;
+      } catch (error) {
+        try { db.exec('ROLLBACK'); } catch { /* preserve migration error */ }
+        throw error;
+      }
+    }
   }
 
   /**

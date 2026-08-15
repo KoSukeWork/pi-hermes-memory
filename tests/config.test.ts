@@ -31,6 +31,7 @@ describe("loadConfig", () => {
     assert.strictEqual(config.memoryOverflowStrategy, "auto-consolidate");
     assert.strictEqual(config.autoConsolidate, true);
     assert.strictEqual(config.consolidationTimeoutMs, 180000);
+    assert.strictEqual(config.overflowGraceMs, 180000);
     assert.strictEqual(config.autoConsolidationWarnOnFailure, true);
     assert.strictEqual(config.failureInjectionEnabled, true);
     assert.strictEqual(config.failureInjectionMaxAgeDays, 7);

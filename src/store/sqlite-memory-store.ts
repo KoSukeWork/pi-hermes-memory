@@ -191,6 +191,12 @@ function escapeLikePattern(text: string): string {
   return text.replace(/[\\%_]/g, '\\$&');
 }
 
+function isShortCjkLiteralQuery(query: string): boolean {
+  const trimmed = query.trim();
+  return [...trimmed].length <= 2
+    && /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+$/u.test(trimmed);
+}
+
 function parseMetadataComment(raw: string): { text: string; created: string; lastReferenced: string; project: string | null } {
   const match = raw.match(/^(.*?)\s*<!--\s*created=([^,]+),\s*last=([^,>]+)(?:,\s*project64=([A-Za-z0-9_-]+))?\s*-->\s*$/);
   if (match) {
@@ -765,9 +771,58 @@ export function searchMemories(
     }
   };
 
+  // FTS5's trigram tokenizer cannot match one- and two-character CJK terms.
+  // Use a scoped literal fallback only for those terms so FTS operators and
+  // normal tokenized searches retain their existing semantics.
+  const runShortCjkFallback = (): SqliteMemoryEntry[] => {
+    const conditions: string[] = ["m.content LIKE ? ESCAPE '\\'"];
+    const params: unknown[] = [`%${escapeLikePattern(query.trim())}%`];
+
+    if (project !== undefined) {
+      if (project === null) {
+        conditions.push('m.project IS NULL');
+      } else {
+        conditions.push('m.project = ?');
+        params.push(project);
+      }
+    }
+    if (target) {
+      conditions.push('m.target = ?');
+      params.push(target);
+    }
+    if (category) {
+      conditions.push('m.category = ?');
+      params.push(category);
+    }
+
+    const rows = db.prepare(`
+      SELECT ${MEMORY_SELECT_COLUMNS}
+      FROM memories m
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY m.last_referenced DESC
+      LIMIT ?
+    `).all(...params, limit) as Array<{
+      id: number;
+      project: string | null;
+      target: string;
+      category: string | null;
+      content: string;
+      failure_reason: string | null;
+      tool_state: string | null;
+      corrected_to: string | null;
+      created: string;
+      last_referenced: string;
+    }>;
+    return rows.map(mapRow);
+  };
+
   const exactResults = runSearch(normalizedQuery);
   if (exactResults.length > 0) {
     return exactResults;
+  }
+
+  if (isShortCjkLiteralQuery(query)) {
+    return runShortCjkFallback();
   }
 
   // A query with uppercase operator words (e.g. "DO NOT USE FIND /") passes
