@@ -5,6 +5,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { DatabaseManager } from '../../src/store/db.js';
 import { addMemory } from '../../src/store/sqlite-memory-store.js';
+import { normalizeMemoryLookupText } from '../../src/store/memory-lookup.js';
 import { registerMemorySearchTool } from '../../src/tools/memory-search-tool.js';
 
 let ROOT_DIR = '';
@@ -48,6 +49,7 @@ describe('registerMemorySearchTool', () => {
     addMemory(dbManager, 'user deployment preference', 'user');
     addMemory(dbManager, 'failure deployment lesson', 'failure');
     addMemory(dbManager, 'project deployment convention', 'memory', 'project-a');
+    addMemory(dbManager, 'project failure deployment lesson', 'failure', 'project-a');
 
     let captured: any;
     registerMemorySearchTool({ registerTool: (def: any) => { captured = def; } } as any, dbManager);
@@ -55,10 +57,27 @@ describe('registerMemorySearchTool', () => {
     const result = await captured.execute('tc-1', { query: 'deployment' });
     const text = result.content[0].text;
 
-    assert.match(text, /\[scope=global\] \[target=memory\] global deployment convention/);
-    assert.match(text, /\[scope=global\] \[target=user\] user deployment preference/);
-    assert.match(text, /\[scope=global\] \[target=failure\] failure deployment lesson/);
-    assert.match(text, /\[scope=project:project-a\] \[target=project\] project deployment convention/);
+    assert.match(text, /scope=global \[target=memory\] global deployment convention/);
+    assert.match(text, /scope=global \[target=user\] user deployment preference/);
+    assert.match(text, /scope=global \[target=failure\] failure deployment lesson/);
+    assert.match(text, /scope=project:project-a \[target=project\] project deployment convention/);
+    assert.match(text, /scope=project:project-a \[target=failure\] project failure deployment lesson/);
+
+    dbManager.close();
+  });
+
+  it('keeps copied results reversible when a project name contains brackets', async () => {
+    const dbManager = makeDbManager();
+    addMemory(dbManager, 'literal project entry', 'memory', 'foo] bar');
+
+    let captured: any;
+    registerMemorySearchTool({ registerTool: (def: any) => { captured = def; } } as any, dbManager);
+
+    const result = await captured.execute('tc-1', { query: 'literal' });
+    const firstResultLine = result.content[0].text.split('\n').find((line: string) => line.startsWith('🧠'))!;
+
+    assert.match(firstResultLine, /scope=project:foo%5D%20bar \[target=project\]/);
+    assert.equal(normalizeMemoryLookupText(firstResultLine), 'literal project entry');
 
     dbManager.close();
   });

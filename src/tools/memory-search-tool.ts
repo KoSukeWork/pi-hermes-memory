@@ -15,11 +15,13 @@ interface SearchResult {
 }
 
 function mutationTarget(entry: { target: "memory" | "user" | "failure"; project: string | null }): "memory" | "user" | "failure" | "project" {
-  return entry.project ? "project" : entry.target;
+  // A project name scopes ordinary memory entries, but project-attributed
+  // failures still live in (and must be mutated through) the failure store.
+  return entry.target === "memory" && entry.project ? "project" : entry.target;
 }
 
 function scopeLabel(project: string | null): string {
-  return project ? `project:${project}` : "global";
+  return project ? `project:${encodeURIComponent(project)}` : "global";
 }
 
 export function registerMemorySearchTool(pi: ExtensionAPI, dbManager: DatabaseManager): void {
@@ -78,7 +80,7 @@ Returns matching memory entries with their mutation target, scope, and dates. Th
 
       for (const entry of results) {
         const target = mutationTarget(entry);
-        const projectLabel = `[scope=${scopeLabel(entry.project)}]`;
+        const projectLabel = `scope=${scopeLabel(entry.project)}`;
         const mutationTargetLabel = `[target=${target}]`;
         const targetLabel = entry.target === 'user' ? '👤' : entry.target === 'failure' ? '⚠️' : '🧠';
         const categoryLabel = entry.category ? ` [${entry.category}]` : '';
