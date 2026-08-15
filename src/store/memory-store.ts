@@ -851,7 +851,7 @@ export class MemoryStore {
 
     try {
       await fs.writeFile(tmpPath, content, "utf-8");
-      await this.pruneRecoveryFiles(filePath, content.length);
+      await this.pruneRecoveryFiles(filePath, Buffer.byteLength(content, "utf8"));
       const currentState = await this.readFileState(filePath);
       if (currentState.fingerprint !== expectedFingerprint) {
         throw new ExternalMemoryWriteConflict();

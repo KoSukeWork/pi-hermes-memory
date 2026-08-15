@@ -1632,6 +1632,23 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       );
       assert.equal(retiredContents.some((content) => content.includes("outside sensitive content")), false);
     });
+    it("budgets an upcoming recovery snapshot in UTF-8 bytes", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      let upcomingBytes: number | undefined;
+      const instrumentedStore = store as unknown as {
+        pruneRecoveryFiles(filePath: string, bytes?: number): Promise<void>;
+      };
+      instrumentedStore.pruneRecoveryFiles = async (_filePath, bytes) => {
+        upcomingBytes = bytes;
+      };
+
+      await store.add("memory", `${TEST_MARKER} 记忆 🧠`);
+
+      const persisted = await fs.stat(memoryPath);
+      assert.equal(upcomingBytes, persisted.size);
+    });
+
     it("bounds active recovery snapshots by count and bytes while keeping the newest", async () => {
       const pathStore = new MemoryStore(makeConfig());
       const store = new MemoryStore(makeConfig());
