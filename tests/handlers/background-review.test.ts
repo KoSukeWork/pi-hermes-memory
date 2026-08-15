@@ -796,7 +796,6 @@ describe("setupBackgroundReview", () => {
     ]);
     assert.deepStrictEqual(execCalls[0][2], {
       cwd: "/tmp/local-session",
-      signal,
       timeout: 125000,
     });
   });

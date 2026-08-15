@@ -511,7 +511,7 @@ describe("setupSessionFlush", () => {
 
     assert.equal(mockPi.execCalls.length, 1);
     const opts = mockPi.execCalls[0].args[2];
-    assert.strictEqual(opts.signal, signal, "compact cancellation should reach pi.exec");
+    assert.strictEqual(opts.signal, undefined, "the watchdog, not pi.exec, owns compact cancellation");
   });
 });
 
