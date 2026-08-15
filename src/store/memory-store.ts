@@ -201,9 +201,10 @@ export class MemoryStore {
   private async _add(
     target: "memory" | "user" | "failure",
     content: string,
-    signal?: AbortSignal,
-    addedMessage = "Entry added.",
-    project?: string,
+    signal: AbortSignal | undefined,
+    addedMessage: string,
+    project: string | undefined,
+    markMutation: () => void,
   ): Promise<MemoryResult> {
     content = content.trim();
     if (!content) return { success: false, error: "Content cannot be empty." };
@@ -232,11 +233,13 @@ export class MemoryStore {
 
     const newTotal = [...entries, encoded].join(ENTRY_DELIMITER).length;
     if (newTotal > limit) {
-      this.overflowSince[target] = Date.now();
+      this.overflowSince[target] ??= Date.now();
       const strategy = this.memoryOverflowStrategy();
 
       if (strategy === "fifo-evict") {
-        return this.fifoEvictAndAdd(target, entries, encoded, content.length, limit);
+        const result = await this.fifoEvictAndAdd(target, entries, encoded, content.length, limit);
+        if (result.success) markMutation();
+        return result;
       }
 
       return this.memoryFullError(target, content.length);
@@ -245,6 +248,7 @@ export class MemoryStore {
     entries.push(encoded);
     this.setEntries(target, entries);
     await this.saveToDisk(target);
+    markMutation();
 
     return this.successResponse(target, addedMessage);
   }
@@ -259,7 +263,7 @@ export class MemoryStore {
   ): Promise<MemoryResult> {
     const result = await this.runTargetMutation(
       target,
-      () => this._add(target, content, signal, addedMessage, project),
+      (markMutation) => this._add(target, content, signal, addedMessage, project, markMutation),
     );
     if (
       result.success
@@ -355,7 +359,7 @@ export class MemoryStore {
     operations: MemoryMutationOperation[],
     options: { requireShrink?: boolean } = {},
   ): Promise<MemoryResult> {
-    return this.runTargetMutation(target, async () => {
+    return this.runTargetMutation(target, async (markMutation) => {
       await this.syncTargetFromDiskIfChanged(target);
       if (operations.length === 0) {
         return { success: false, error: "Memory mutation plan requires at least one operation." };
@@ -432,15 +436,24 @@ export class MemoryStore {
 
       this.setEntries(target, plannedEntries);
       await this.saveToDisk(target);
+      markMutation();
       return this.successResponse(target, `Applied ${operations.length} memory operations atomically.`);
     });
   }
 
   async replace(target: "memory" | "user" | "failure", oldText: string, newContent: string): Promise<MemoryResult> {
-    return this.runTargetMutation(target, () => this.replaceUnlocked(target, oldText, newContent));
+    return this.runTargetMutation(
+      target,
+      (markMutation) => this.replaceUnlocked(target, oldText, newContent, markMutation),
+    );
   }
 
-  private async replaceUnlocked(target: "memory" | "user" | "failure", oldText: string, newContent: string): Promise<MemoryResult> {
+  private async replaceUnlocked(
+    target: "memory" | "user" | "failure",
+    oldText: string,
+    newContent: string,
+    markMutation: () => void,
+  ): Promise<MemoryResult> {
     oldText = normalizeMemoryLookupText(oldText);
     newContent = newContent.trim();
     if (!oldText) return { success: false, error: "old_text cannot be empty." };
@@ -504,15 +517,23 @@ export class MemoryStore {
 
     this.setEntries(target, testEntries);
     await this.saveToDisk(target);
+    markMutation();
 
     return this.successResponse(target, "Entry replaced.");
   }
 
   async remove(target: "memory" | "user" | "failure", oldText: string): Promise<MemoryResult> {
-    return this.runTargetMutation(target, () => this.removeUnlocked(target, oldText));
+    return this.runTargetMutation(
+      target,
+      (markMutation) => this.removeUnlocked(target, oldText, markMutation),
+    );
   }
 
-  private async removeUnlocked(target: "memory" | "user" | "failure", oldText: string): Promise<MemoryResult> {
+  private async removeUnlocked(
+    target: "memory" | "user" | "failure",
+    oldText: string,
+    markMutation: () => void,
+  ): Promise<MemoryResult> {
     oldText = normalizeMemoryLookupText(oldText);
     if (!oldText) return { success: false, error: "old_text cannot be empty." };
 
@@ -532,6 +553,7 @@ export class MemoryStore {
     const matchedEntries = new Set(matches);
     this.setEntries(target, entries.filter((entry) => !matchedEntries.has(entry)));
     await this.saveToDisk(target);
+    markMutation();
 
     return this.successResponse(target, "Entry removed.");
   }
@@ -793,13 +815,16 @@ export class MemoryStore {
 
   private async runTargetMutation(
     target: "memory" | "user" | "failure",
-    mutation: () => Promise<MemoryResult>,
+    mutation: (markMutation: () => void) => Promise<MemoryResult>,
   ): Promise<MemoryResult> {
     const storagePath = await this.resolveStoragePath(target);
     return withMarkdownMutationLock(storagePath, async () => {
       for (let attempt = 0; ; attempt++) {
+        let mutated = false;
         try {
-          const result = await mutation();
+          const result = await mutation(() => {
+            mutated = true;
+          });
           if (result.success) {
             // saveToDisk stamps fileFingerprints on success. If an editor
             // truncates/replaces the file after publish returns, refuse the
@@ -814,7 +839,7 @@ export class MemoryStore {
               }
             }
           }
-          if (result.success) this.clearOverflow(target);
+          if (result.success && mutated) this.clearOverflow(target);
           return await this.finalizeTargetMutation(target, storagePath, result);
         } catch (error) {
           delete this.fileFingerprints[storagePath];

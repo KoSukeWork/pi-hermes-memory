@@ -229,6 +229,65 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       assert.match(secondOverflow.error ?? "", /deferred/);
     });
 
+    it("runs auto-consolidation after the original overflow grace expires", async (t) => {
+      const originalNow = Date.now;
+      let now = originalNow();
+      Date.now = () => now;
+      t.after(() => {
+        Date.now = originalNow;
+      });
+      let consolidatorCalls = 0;
+      const store = new MemoryStore(makeConfig({
+        memoryCharLimit: 180,
+        memoryOverflowStrategy: "auto-consolidate",
+        autoConsolidate: true,
+        overflowGraceMs: 60_000,
+      }));
+      store.setConsolidator(async () => {
+        consolidatorCalls++;
+        return { consolidated: false, error: "test consolidation" };
+      });
+      await store.loadFromDisk();
+      await store.add("memory", `${TEST_MARKER} ${"seed".repeat(12)}`);
+
+      await store.add("memory", `${TEST_MARKER} ${"incoming".repeat(20)}`);
+      now += 60_001;
+      const retried = await store.add("memory", `${TEST_MARKER} ${"incoming".repeat(20)}`);
+
+      assert.equal(consolidatorCalls, 1);
+      assert.match(retried.error ?? "", /test consolidation/);
+    });
+
+    it("does not restart expired overflow grace after a duplicate add", async (t) => {
+      const originalNow = Date.now;
+      let now = originalNow();
+      Date.now = () => now;
+      t.after(() => {
+        Date.now = originalNow;
+      });
+      let consolidatorCalls = 0;
+      const store = new MemoryStore(makeConfig({
+        memoryCharLimit: 180,
+        memoryOverflowStrategy: "auto-consolidate",
+        autoConsolidate: true,
+        overflowGraceMs: 60_000,
+      }));
+      store.setConsolidator(async () => {
+        consolidatorCalls++;
+        return { consolidated: false, error: "test consolidation" };
+      });
+      await store.loadFromDisk();
+      const seed = `${TEST_MARKER} ${"seed".repeat(12)}`;
+      await store.add("memory", seed);
+      await store.add("memory", `${TEST_MARKER} ${"incoming".repeat(20)}`);
+      now += 60_001;
+
+      assert.equal((await store.add("memory", seed)).success, true);
+      await store.add("memory", `${TEST_MARKER} ${"incoming".repeat(20)}`);
+
+      assert.equal(consolidatorCalls, 1);
+    });
+
     it("clears overflow grace after a successful manual write", async () => {
       let consolidatorCalls = 0;
       const store = new MemoryStore(makeConfig({
