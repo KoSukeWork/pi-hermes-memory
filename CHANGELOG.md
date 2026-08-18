@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Over-capacity auto-consolidation now uses the live session model registry.** Overflow used to spawn a `--no-extensions` child `pi` that could not see dynamic providers such as NewAPI. The parent now reuses the session `model`/`modelRegistry` captured on `session_start` and `before_agent_start`, matching `/memory-consolidate`. Subprocess remains a fallback only.
+
 ### Security
 
 - **Child subprocesses no longer auto-load `*-oauth-adapter` / `*-auth-adapter` packages by name.** Only the exact allowlist (`pi-claude-auth`, `@gotgenes/pi-anthropic-auth`) is discovered from sibling `node_modules`. Other adapters must be listed in `childExtensionPaths`.

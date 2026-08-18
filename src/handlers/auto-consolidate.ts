@@ -3,11 +3,10 @@
  * consolidation instead of returning an error.
  *
  * Default transport: in-process direct completion (same mechanism as
- * background review — see review-memory-ops.ts), used only when a caller
- * supplies model/modelRegistry access (the manual `/memory-consolidate`
- * command has it; the automatic over-capacity consolidator registered on
- * MemoryStore does not, since MemoryStore itself has no extension-runtime
- * access, so that path stays subprocess-only). Falls back to a `pi -p`
+ * background review — see review-memory-ops.ts). Manual `/memory-consolidate`
+ * passes the command context; automatic over-capacity consolidation uses the
+ * last live session context remembered from session_start / before_agent_start
+ * so NewAPI and other dynamic providers stay available. Falls back to a `pi -p`
  * subprocess when direct mode is unavailable, declines, or fails.
  *
  * The subprocess child process modifies files on disk, so the parent MUST

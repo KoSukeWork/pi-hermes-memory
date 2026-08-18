@@ -39,6 +39,7 @@ import { registerMemorySearchTool } from "./tools/memory-search-tool.js";
 import { setupBackgroundReview } from "./handlers/background-review.js";
 import { setupSessionFlush } from "./handlers/session-flush.js";
 import { registerInsightsCommand } from "./handlers/insights.js";
+import { rememberDirectRuntimeContext, getDirectRuntimeContext } from "./direct-runtime-context.js";
 import { triggerConsolidation, registerConsolidateCommand } from "./handlers/auto-consolidate.js";
 import { setupCorrectionDetector } from "./handlers/correction-detector.js";
 import { registerSkillsCommand } from "./handlers/skills-command.js";
@@ -165,6 +166,7 @@ export default function (pi: ExtensionAPI) {
 
   // ── 1. Load memory from disk on session start ──
   pi.on("session_start", async (_event, ctx) => {
+    rememberDirectRuntimeContext(ctx);
     if (!persistenceInitialized) {
       try {
         await migrateThenSyncMarkdownMemories(
@@ -220,7 +222,8 @@ export default function (pi: ExtensionAPI) {
   registerProjectSkillDiscoveryHandler(pi, skillStore, config.projectsMemoryDir);
 
   // ── 2. Inject memory policy by default; legacy mode keeps full frozen memory blocks ──
-  pi.on("before_agent_start", async (event, _ctx) => {
+  pi.on("before_agent_start", async (event, ctx) => {
+    rememberDirectRuntimeContext(ctx);
     const promptContext = await buildPromptContext(config, store, projectStoreRef(), projectNameRef(), standingStore);
 
     if (promptContext) {
@@ -262,6 +265,9 @@ export default function (pi: ExtensionAPI) {
       config.consolidationTimeoutMs,
       toolTarget,
       config,
+      getDirectRuntimeContext(),
+      dbManager,
+      projectNameRef(),
     );
     if (result.deferred) {
       console.info(`⏳ Auto-consolidation for '${toolTarget}' deferred: ${result.error ?? "another session holds the consolidation lock"}`);

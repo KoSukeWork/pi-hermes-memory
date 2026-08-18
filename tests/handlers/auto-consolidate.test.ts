@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
+import { getDirectRuntimeContext, rememberDirectRuntimeContext } from "../../src/direct-runtime-context.js";
 import { registerConsolidateCommand, triggerConsolidation } from "../../src/handlers/auto-consolidate.js";
 import { resolveWatchedChildPiInvocation } from "../../src/handlers/pi-child-process.js";
 import { MemoryStore } from "../../src/store/memory-store.js";
@@ -598,6 +599,28 @@ it("returns { consolidated: false } when pi.exec throws", async () => {
       assert.strictEqual(result.consolidated, true);
       assert.strictEqual(directCalls.length, 1);
       assert.strictEqual(execCalls.length, 1, "thrown direct error must fall back to subprocess");
+    });
+
+    it("uses a remembered session registry the same way overflow consolidation will", async () => {
+      const pi = createMockPi();
+      rememberDirectRuntimeContext(createDirectCtx());
+      const result = await triggerConsolidation(
+        pi,
+        mockStore,
+        "memory",
+        undefined,
+        60000,
+        "memory",
+        directTransportLlmConfig,
+        getDirectRuntimeContext(),
+        null,
+        null,
+        makeDirectDeps({ ok: true, appliedCount: 3 }),
+      );
+
+      assert.strictEqual(result.consolidated, true);
+      assert.strictEqual(directCalls.length, 1);
+      assert.strictEqual(execCalls.length, 0, "remembered session registry must take the direct path");
     });
 
     it("does not attempt direct transport when directCtx is null", async () => {
