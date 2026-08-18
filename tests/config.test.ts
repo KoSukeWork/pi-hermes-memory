@@ -126,12 +126,23 @@ describe("loadConfig", () => {
 
   it("loads, trims, and deduplicates child extension paths", () => {
     fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({
-      childExtensionPaths: [" /tmp/auth-adapter.ts ", "/tmp/auth-adapter.ts", "/tmp/other-adapter.ts"],
+      childExtensionPaths: [
+        " /tmp/auth-adapter.ts ",
+        "/tmp/auth-adapter.ts",
+        "/tmp/other-adapter.ts",
+        "javascript:alert(1)",
+        "../escape.ts",
+        "git:github.com/example/provider@v1",
+      ],
     }));
 
     const config = loadConfig(TEST_CONFIG_PATH);
 
-    assert.deepStrictEqual(config.childExtensionPaths, ["/tmp/auth-adapter.ts", "/tmp/other-adapter.ts"]);
+    assert.deepStrictEqual(config.childExtensionPaths, [
+      "/tmp/auth-adapter.ts",
+      "/tmp/other-adapter.ts",
+      "git:github.com/example/provider@v1",
+    ]);
   });
 
   it("ignores invalid child extension path configuration", () => {

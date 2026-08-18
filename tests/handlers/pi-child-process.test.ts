@@ -60,7 +60,7 @@ describe("detectAuthAdapterExtensionPaths", () => {
     }
   });
 
-  it("detects a convention-named adapter via its package.json manifest (xai-oauth-adapter)", async () => {
+  it("does not auto-load a convention-named adapter that is not allowlisted", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-auth-detect-xai-"));
     const adapterDir = path.join(root, "xai-oauth-adapter");
     const adapterPath = path.join(adapterDir, "extensions", "index.ts");
@@ -71,13 +71,13 @@ describe("detectAuthAdapterExtensionPaths", () => {
       JSON.stringify({ name: "xai-oauth-adapter", pi: { extensions: ["extensions/index.ts"] } }),
     );
     try {
-      assert.deepStrictEqual(detectAuthAdapterExtensionPaths([root]), [adapterPath]);
+      assert.deepStrictEqual(detectAuthAdapterExtensionPaths([root]), []);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
 
-  it("detects a scoped convention-named adapter one level under @scope", async () => {
+  it("does not auto-load a scoped convention-named adapter that is not allowlisted", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-auth-detect-scoped-"));
     const adapterDir = path.join(root, "@xai", "pi-oauth-adapter");
     const adapterPath = path.join(adapterDir, "entry.ts");
@@ -88,13 +88,13 @@ describe("detectAuthAdapterExtensionPaths", () => {
       JSON.stringify({ name: "@xai/pi-oauth-adapter", pi: { extensions: ["entry.ts"] } }),
     );
     try {
-      assert.deepStrictEqual(detectAuthAdapterExtensionPaths([root]), [adapterPath]);
+      assert.deepStrictEqual(detectAuthAdapterExtensionPaths([root]), []);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
 
-  it("ignores packages that do not match the auth-adapter naming convention", async () => {
+  it("ignores packages that are not on the auth-adapter allowlist", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-auth-detect-nonmatch-"));
     const pkgDir = path.join(root, "some-other-package");
     const extPath = path.join(pkgDir, "extensions", "index.ts");
@@ -133,16 +133,16 @@ describe("detectAuthAdapterExtensionPaths", () => {
     }
   });
 
-  it("filters out manifest entries whose files do not exist on disk", async () => {
+  it("filters out allowlisted manifest entries whose files do not exist on disk", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-auth-detect-missing-"));
-    const adapterDir = path.join(root, "pi-oauth-adapter");
+    const adapterDir = path.join(root, "pi-claude-auth");
     const presentPath = path.join(adapterDir, "extensions", "present.ts");
     await fs.mkdir(path.dirname(presentPath), { recursive: true });
     await fs.writeFile(presentPath, "export default () => {};");
     await fs.writeFile(
       path.join(adapterDir, "package.json"),
       JSON.stringify({
-        name: "pi-oauth-adapter",
+        name: "pi-claude-auth",
         pi: { extensions: ["extensions/missing.ts", "extensions/present.ts"] },
       }),
     );
@@ -153,23 +153,23 @@ describe("detectAuthAdapterExtensionPaths", () => {
     }
   });
 
-  it("collects extension entries from every matching package under one root", async () => {
+  it("collects extension entries from every allowlisted package under one root", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-auth-detect-multi-"));
-    const firstDir = path.join(root, "alpha-oauth-adapter");
+    const firstDir = path.join(root, "pi-claude-auth");
     const firstPath = path.join(firstDir, "a.ts");
-    const secondDir = path.join(root, "beta-auth-adapter");
+    const secondDir = path.join(root, "@gotgenes", "pi-anthropic-auth");
     const secondPath = path.join(secondDir, "b.ts");
     await fs.mkdir(path.dirname(firstPath), { recursive: true });
     await fs.writeFile(firstPath, "export default () => {};");
     await fs.writeFile(
       path.join(firstDir, "package.json"),
-      JSON.stringify({ name: "alpha-oauth-adapter", pi: { extensions: ["a.ts"] } }),
+      JSON.stringify({ name: "pi-claude-auth", pi: { extensions: ["a.ts"] } }),
     );
     await fs.mkdir(path.dirname(secondPath), { recursive: true });
     await fs.writeFile(secondPath, "export default () => {};");
     await fs.writeFile(
       path.join(secondDir, "package.json"),
-      JSON.stringify({ name: "beta-auth-adapter", pi: { extensions: ["b.ts"] } }),
+      JSON.stringify({ name: "@gotgenes/pi-anthropic-auth", pi: { extensions: ["b.ts"] } }),
     );
     try {
       const detected = detectAuthAdapterExtensionPaths([root]);
@@ -181,22 +181,22 @@ describe("detectAuthAdapterExtensionPaths", () => {
     }
   });
 
-  it("merges matches from multiple roots passed in the roots array", async () => {
+  it("merges allowlisted matches from multiple roots passed in the roots array", async () => {
     const rootA = await fs.mkdtemp(path.join(os.tmpdir(), "pi-auth-detect-roota-"));
     const rootB = await fs.mkdtemp(path.join(os.tmpdir(), "pi-auth-detect-rootb-"));
-    const pathA = path.join(rootA, "one-oauth-adapter", "one.ts");
-    const pathB = path.join(rootB, "two-oauth-adapter", "two.ts");
+    const pathA = path.join(rootA, "pi-claude-auth", "one.ts");
+    const pathB = path.join(rootB, "@gotgenes", "pi-anthropic-auth", "two.ts");
     await fs.mkdir(path.dirname(pathA), { recursive: true });
     await fs.writeFile(pathA, "export default () => {};");
     await fs.writeFile(
-      path.join(rootA, "one-oauth-adapter", "package.json"),
-      JSON.stringify({ name: "one-oauth-adapter", pi: { extensions: ["one.ts"] } }),
+      path.join(rootA, "pi-claude-auth", "package.json"),
+      JSON.stringify({ name: "pi-claude-auth", pi: { extensions: ["one.ts"] } }),
     );
     await fs.mkdir(path.dirname(pathB), { recursive: true });
     await fs.writeFile(pathB, "export default () => {};");
     await fs.writeFile(
-      path.join(rootB, "two-oauth-adapter", "package.json"),
-      JSON.stringify({ name: "two-oauth-adapter", pi: { extensions: ["two.ts"] } }),
+      path.join(rootB, "@gotgenes", "pi-anthropic-auth", "package.json"),
+      JSON.stringify({ name: "@gotgenes/pi-anthropic-auth", pi: { extensions: ["two.ts"] } }),
     );
     try {
       const detected = detectAuthAdapterExtensionPaths([rootA, rootB]);
@@ -313,7 +313,7 @@ describe("buildChildPiPromptArgs", () => {
     );
   });
 
-  it("passes configured extension sources through Pi's -e resolver and excludes inherited extensions", async () => {
+  it("passes trusted configured extension sources and excludes inherited extensions", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-child-extensions-"));
     const configured = path.join(dir, "configured.ts");
     const inherited = path.join(dir, "inherited.ts");
@@ -327,6 +327,7 @@ describe("buildChildPiPromptArgs", () => {
             configured,
             "~/.pi/agent/extensions/provider.ts",
             "./relative-provider.ts",
+            "javascript:alert(1)",
             "git:github.com/example/provider-extension@v1",
             "npm:@example/provider-extension@1.0.0",
             OWN_EXTENSION_PATH,
@@ -335,9 +336,7 @@ describe("buildChildPiPromptArgs", () => {
         [
           "-p", "--no-session", "--no-extensions",
           "-e", OWN_EXTENSION_PATH,
-          "-e", configured,
-          "-e", "~/.pi/agent/extensions/provider.ts",
-          "-e", "./relative-provider.ts",
+          "-e", path.resolve(configured),
           "-e", "git:github.com/example/provider-extension@v1",
           "-e", "npm:@example/provider-extension@1.0.0",
           ...DETECTED_ADAPTER_ARGS,
@@ -349,7 +348,7 @@ describe("buildChildPiPromptArgs", () => {
     }
   });
 
-  it("detects a sibling pi-claude-oauth-adapter extension via its package.json manifest", async () => {
+  it("does not auto-load a sibling pi-claude-oauth-adapter that is not allowlisted", async () => {
     const nodeModules = await fs.mkdtemp(path.join(os.tmpdir(), "pi-node-modules-"));
     const adapterDir = path.join(nodeModules, "pi-claude-oauth-adapter");
     const adapterPath = path.join(adapterDir, "extensions", "index.ts");
@@ -360,7 +359,7 @@ describe("buildChildPiPromptArgs", () => {
       JSON.stringify({ name: "pi-claude-oauth-adapter", pi: { extensions: ["extensions/index.ts"] } }),
     );
     try {
-      assert.deepStrictEqual(detectAuthAdapterExtensionPaths([nodeModules]), [adapterPath]);
+      assert.deepStrictEqual(detectAuthAdapterExtensionPaths([nodeModules]), []);
     } finally {
       await fs.rm(nodeModules, { recursive: true, force: true });
     }

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Child subprocesses no longer auto-load `*-oauth-adapter` / `*-auth-adapter` packages by name.** Only the exact allowlist (`pi-claude-auth`, `@gotgenes/pi-anthropic-auth`) is discovered from sibling `node_modules`. Other adapters must be listed in `childExtensionPaths`.
+- **`childExtensionPaths` is fail-closed.** Control characters, `..` segments, and non-allowlisted schemes are rejected. Local paths must exist at child launch. Package sources are limited to `npm:`, `git:github.com/...`, `git:git@github.com:...`, and `https://github.com/...`.
+
 ### Fixed
 
 - **Portable child extension sources were discarded before Pi could resolve them**: `childExtensionPaths` ran every configured value through Node's cwd-relative `path.resolve()` and required that resulting local path to already exist. This silently dropped Pi-native `~/...`, `git:...`, and `npm:...` extension sources, forcing machine-specific absolute paths for custom providers in isolated subprocesses. Configured sources are now passed unchanged to Pi's standard `-e` resolver, while Hermes-discovered auth adapter paths retain their local existence checks.

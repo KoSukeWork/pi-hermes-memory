@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { MemoryConfig, ThinkingLevel } from "../types.js";
+import { normalizeChildExtensionSource } from "../child-extension-source.js";
 import { AGENT_ROOT } from "../paths.js";
 
 type ChildLlmConfig = Pick<MemoryConfig, "llmModelOverride" | "llmThinkingOverride" | "childExtensionPaths">;
@@ -113,37 +114,21 @@ export function inheritedExtensionArgs(argv: string[] = process.argv.slice(2)): 
   return args;
 }
 
-// Provider-auth-adapter packages (e.g. Anthropic/xAI/Codex OAuth) inject
-// subscription billing headers via pi.registerProvider(). --no-extensions
-// strips these from child `pi -p` subprocesses, which silently rebills
-// subscription usage as pay-as-you-go "extra usage" instead (see issue #94).
+// Provider-auth-adapter packages inject subscription billing headers via
+// pi.registerProvider(). --no-extensions strips these from child `pi -p`
+// subprocesses, which silently rebills subscription usage as pay-as-you-go
+// "extra usage" instead (see issue #94).
 //
-// pi has no runtime API to enumerate loaded extensions or map a registered
-// provider back to its extension file, so we can't ask pi "what adapter is
-// active" directly. Instead we mirror pi's OWN static package-discovery
-// convention (package.json -> "pi": { "extensions": [...] }, the same field
-// pi-hermes-memory's own package.json declares) and match sibling package
-// names against a naming convention, so a future xai-oauth-adapter or
-// pi-codex-oauth-adapter is picked up automatically without a code change
-// here — no code execution, just JSON reads of sibling package.json files.
-const AUTH_ADAPTER_NAME_PATTERNS: readonly RegExp[] = [
-  /(^|[-/])oauth-adapter$/,
-  /(^|[-/])auth-adapter$/,
-];
-
-// These provider adapters predate the *-auth-adapter convention. Keep this
-// list exact so an arbitrary suffixless *-auth package cannot access child
-// maintenance prompts.
+// Auto-load only this exact allowlist. A naming convention such as
+// *-oauth-adapter would also load a same-named untrusted package from
+// node_modules. Additional adapters belong in childExtensionPaths.
 const AUTH_ADAPTER_PACKAGE_NAMES: ReadonlySet<string> = new Set([
   "pi-claude-auth",
   "@gotgenes/pi-anthropic-auth",
 ]);
 
 function isAuthAdapterPackageName(name: string): boolean {
-  return (
-    AUTH_ADAPTER_PACKAGE_NAMES.has(name)
-    || AUTH_ADAPTER_NAME_PATTERNS.some((pattern) => pattern.test(name))
-  );
+  return AUTH_ADAPTER_PACKAGE_NAMES.has(name);
 }
 
 // Read a sibling package's "pi": { "extensions": [...] } manifest field —
@@ -183,7 +168,7 @@ function scanRootForAuthAdapters(root: string): string[] {
   const detected: string[] = [];
   for (const entry of entries) {
     if (entry.startsWith("@")) {
-      // Scoped org, e.g. @xai/pi-oauth-adapter — one extra level, no deeper.
+      // Scoped org, e.g. @gotgenes/pi-anthropic-auth — one extra level, no deeper.
       const scopeDir = join(root, entry);
       let scopedPackages: string[];
       try {
@@ -239,7 +224,14 @@ function childExtensionSources(config: ChildLlmConfig): string[] {
   // These paths are discovered by Hermes rather than explicitly trusted in
   // configuration, so keep the local existence check before forwarding them.
   if (OWN_EXTENSION_PATH && existsSync(OWN_EXTENSION_PATH)) append(OWN_EXTENSION_PATH);
-  for (const source of config.childExtensionPaths ?? []) append(source);
+  for (const source of config.childExtensionPaths ?? []) {
+    const trusted = normalizeChildExtensionSource(source, { requireLocalExists: true });
+    if (!trusted) {
+      console.warn(`pi-hermes-memory: ignoring untrusted or missing childExtensionPaths entry: ${source}`);
+      continue;
+    }
+    append(trusted);
+  }
   for (const adapterPath of detectAuthAdapterExtensionPaths()) {
     const normalized = resolve(adapterPath);
     if (existsSync(normalized)) append(normalized);

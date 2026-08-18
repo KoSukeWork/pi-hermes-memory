@@ -16,6 +16,7 @@ import {
   DEFAULT_FAILURE_INJECTION_MAX_AGE_DAYS,
   DEFAULT_FAILURE_INJECTION_MAX_ENTRIES,
 } from "./constants.js";
+import { normalizeChildExtensionSources } from "./child-extension-source.js";
 import { AGENT_ROOT, normalizeConfiguredMemoryDir, normalizeProjectsMemoryDir } from "./paths.js";
 
 const MEMORY_OVERFLOW_STRATEGIES: readonly MemoryOverflowStrategy[] = ["auto-consolidate", "reject", "fifo-evict"];
@@ -159,9 +160,7 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
       }
       if (isThinkingLevel(parsed.llmThinkingOverride)) config.llmThinkingOverride = parsed.llmThinkingOverride;
       if (isStringArray(parsed.childExtensionPaths)) {
-        const childExtensionPaths = [...new Set<string>(
-          (parsed.childExtensionPaths as string[]).map((item) => item.trim()).filter(Boolean),
-        )];
+        const childExtensionPaths = normalizeChildExtensionSources(parsed.childExtensionPaths);
         if (childExtensionPaths.length > 0) config.childExtensionPaths = childExtensionPaths;
       }
       if (hasMemoryOverflowStrategy) {
