@@ -14,7 +14,7 @@
   ],
   "pi": {
     "extensions": [
-      "./dist/bootstrap.js"
+      "./src/bootstrap.ts"
     ]
   },
   "scripts": {
