@@ -1,5 +1,5 @@
 node_modules/
-dist/*
+dist/
 *.js.map
 *.d.ts.map
 .DS_Store
@@ -29,6 +29,4 @@ docs/0.4/linkedin_post.md
 .codex
 .serena
 
-# Keep compiled extension entrypoints (git install has no build step)
-!dist/*.js
-!**/dist/*.js
+

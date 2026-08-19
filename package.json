@@ -9,8 +9,7 @@
     "scripts",
     "README.md",
     "LICENSE",
-    "docs",
-    "dist"
+    "docs"
   ],
   "pi": {
     "extensions": [
