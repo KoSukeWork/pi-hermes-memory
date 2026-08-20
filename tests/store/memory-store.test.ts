@@ -1432,6 +1432,129 @@ describe("MemoryStore", { concurrency: 1 }, () => {
       assert.match(raw, /local add/);
     });
 
+    async function appendAfterPublishedFingerprintRead(store: MemoryStore, filePath: string, extra: string): Promise<void> {
+      const originalRead = (store as any).readFileState.bind(store);
+      const canonicalPath = await fs.realpath(filePath);
+      let fileReads = 0;
+      (store as any).readFileState = async (readPath: string) => {
+        const state = await originalRead(readPath);
+        if (readPath === canonicalPath) {
+          fileReads++;
+          if (fileReads === 2) {
+            const current = await readRaw(filePath);
+            await writeRaw(filePath, `${current}${ENTRY_DELIMITER}${extra}`);
+          }
+        }
+        return state;
+      };
+    }
+
+    it("treats a post-publish remove retry as success when the entry is already gone", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("user", `${TEST_MARKER} keep me`);
+      await store.add("user", `${TEST_MARKER} remove me`);
+
+      const observed: string[][] = [];
+      store.setMutationObserver(async (_target, entries) => {
+        observed.push([...entries]);
+        return null;
+      });
+
+      await appendAfterPublishedFingerprintRead(store, userPath, `${TEST_MARKER} late editor`);
+
+      const result = await store.remove("user", `${TEST_MARKER} remove me`);
+
+      assert.equal(result.success, true, result.error);
+      assert.equal(result.message, "Entry removed.");
+      const raw = await readRaw(userPath);
+      assert.match(raw, /keep me/);
+      assert.match(raw, /late editor/);
+      assert.doesNotMatch(raw, /remove me/);
+      assert.ok(observed.length >= 1);
+      const last = observed[observed.length - 1].map((entry) => entry.replace(/\s*<!--.*?-->\s*$/s, ""));
+      assert.ok(last.some((entry) => entry.includes("keep me")));
+      assert.ok(last.some((entry) => entry.includes("late editor")));
+      assert.ok(last.every((entry) => !entry.includes("remove me")));
+    });
+
+    it("treats a post-publish replace retry as success when the new entry is already on disk", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("user", `${TEST_MARKER} old name`);
+
+      await appendAfterPublishedFingerprintRead(store, userPath, `${TEST_MARKER} late editor`);
+
+      const result = await store.replace("user", `${TEST_MARKER} old name`, `${TEST_MARKER} new name`);
+
+      assert.equal(result.success, true, result.error);
+      assert.equal(result.message, "Entry replaced.");
+      const raw = await readRaw(userPath);
+      assert.match(raw, /new name/);
+      assert.match(raw, /late editor/);
+      assert.doesNotMatch(raw, /old name/);
+    });
+
+    it("still removes on retry when an editor restores the deleted entry", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("user", `${TEST_MARKER} keep me`);
+      await store.add("user", `${TEST_MARKER} remove me`);
+
+      const originalRead = (store as any).readFileState.bind(store);
+      const canonicalPath = await fs.realpath(userPath);
+      let fileReads = 0;
+      (store as any).readFileState = async (readPath: string) => {
+        const state = await originalRead(readPath);
+        if (readPath === canonicalPath) {
+          fileReads++;
+          if (fileReads === 2) {
+            await writeRaw(
+              userPath,
+              [`${TEST_MARKER} keep me`, `${TEST_MARKER} remove me`, `${TEST_MARKER} restored editor`].join(ENTRY_DELIMITER),
+            );
+          }
+        }
+        return state;
+      };
+
+      const result = await store.remove("user", `${TEST_MARKER} remove me`);
+
+      assert.equal(result.success, true, result.error);
+      const raw = await readRaw(userPath);
+      assert.match(raw, /keep me/);
+      assert.match(raw, /restored editor/);
+      assert.doesNotMatch(raw, /remove me/);
+    });
+
+    it("still errors on a first-attempt remove miss", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      await store.add("user", `${TEST_MARKER} keep me`);
+
+      const result = await store.remove("user", `${TEST_MARKER} never existed`);
+
+      assert.equal(result.success, false);
+      assert.match(result.error ?? "", /No entry matched/);
+      assert.match(await readRaw(userPath), /keep me/);
+    });
+
+    it("serializes concurrent removes of distinct user entries", async () => {
+      const store = new MemoryStore(makeConfig());
+      await store.loadFromDisk();
+      const labels = Array.from({ length: 8 }, (_, i) => `${TEST_MARKER} item ${i}`);
+      for (const label of labels) {
+        const added = await store.add("user", label);
+        assert.equal(added.success, true, added.error);
+      }
+
+      const results = await Promise.all(labels.map((label) => store.remove("user", label)));
+      for (const result of results) {
+        assert.equal(result.success, true, result.error);
+      }
+      assert.equal((await readRaw(userPath)).trim(), "");
+    });
+
     it("recovers a write through an open descriptor after displacement", async () => {
       const store = new MemoryStore(makeConfig());
       await store.loadFromDisk();

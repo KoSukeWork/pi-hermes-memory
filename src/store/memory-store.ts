@@ -364,7 +364,7 @@ export class MemoryStore {
     operations: MemoryMutationOperation[],
     options: { requireShrink?: boolean } = {},
   ): Promise<MemoryResult> {
-    return this.runTargetMutation(target, async (markMutation) => {
+    return this.runTargetMutation(target, async (markMutation, attempt) => {
       await this.syncTargetFromDiskIfChanged(target);
       if (operations.length === 0) {
         return { success: false, error: "Memory mutation plan requires at least one operation." };
@@ -393,6 +393,7 @@ export class MemoryStore {
             return decoded.text === normalizedContent
               && (target !== "failure" || decoded.project === normalizedProject);
           })) {
+            if (attempt > 0) continue;
             return { success: false, error: "Memory mutation plan would add a duplicate entry." };
           }
           plannedEntries.push(this.encodeEntry(normalizedContent, today, today, operation.project));
@@ -402,7 +403,17 @@ export class MemoryStore {
         const oldText = normalizeMemoryLookupText(operation.oldText ?? "");
         if (!oldText) return { success: false, error: `Memory mutation ${operation.action} requires old_text.` };
         const matches = plannedEntries.filter((entry) => this.stripMetadata(entry).includes(oldText));
-        if (matches.length === 0) return { success: false, error: `No entry matched '${oldText}'.` };
+        if (matches.length === 0) {
+          if (attempt > 0 && operation.action === "remove") continue;
+          if (
+            attempt > 0
+            && operation.action === "replace"
+            && plannedEntries.some((entry) => this.stripMetadata(entry) === (operation.content?.trim() ?? ""))
+          ) {
+            continue;
+          }
+          return { success: false, error: `No entry matched '${oldText}'.` };
+        }
         if (matches.length > 1 && !this.areDistinctScopedFailureCopies(target, matches)) {
           return { success: false, error: `Multiple entries matched '${oldText}'. Be more specific.` };
         }
@@ -451,7 +462,7 @@ export class MemoryStore {
   async replace(target: "memory" | "user" | "failure", oldText: string, newContent: string): Promise<MemoryResult> {
     return this.runTargetMutation(
       target,
-      (markMutation) => this.replaceUnlocked(target, oldText, newContent, markMutation),
+      (markMutation, attempt) => this.replaceUnlocked(target, oldText, newContent, markMutation, attempt),
     );
   }
 
@@ -460,6 +471,7 @@ export class MemoryStore {
     oldText: string,
     newContent: string,
     markMutation: () => void,
+    attempt = 0,
   ): Promise<MemoryResult> {
     oldText = normalizeMemoryLookupText(oldText);
     newContent = newContent.trim();
@@ -474,7 +486,14 @@ export class MemoryStore {
     // Match against stripped text (entries may have metadata comments)
     const matches = entries.filter((e) => this.stripMetadata(e).includes(oldText));
 
-    if (matches.length === 0) return { success: false, error: `No entry matched '${oldText}'.` };
+    if (matches.length === 0) {
+      // Post-publish fingerprint retries reload disk. If this replace already
+      // landed, old_text is gone and reporting "No entry matched" is a lie.
+      if (attempt > 0 && entries.some((entry) => this.stripMetadata(entry) === newContent)) {
+        return this.successResponse(target, "Entry replaced.");
+      }
+      return { success: false, error: `No entry matched '${oldText}'.` };
+    }
     if (matches.length > 1 && !this.areDistinctScopedFailureCopies(target, matches)) {
       return {
         success: false,
@@ -511,7 +530,7 @@ export class MemoryStore {
   async remove(target: "memory" | "user" | "failure", oldText: string): Promise<MemoryResult> {
     return this.runTargetMutation(
       target,
-      (markMutation) => this.removeUnlocked(target, oldText, markMutation),
+      (markMutation, attempt) => this.removeUnlocked(target, oldText, markMutation, attempt),
     );
   }
 
@@ -519,6 +538,7 @@ export class MemoryStore {
     target: "memory" | "user" | "failure",
     oldText: string,
     markMutation: () => void,
+    attempt = 0,
   ): Promise<MemoryResult> {
     oldText = normalizeMemoryLookupText(oldText);
     if (!oldText) return { success: false, error: "old_text cannot be empty." };
@@ -527,7 +547,12 @@ export class MemoryStore {
     const entries = this.entriesFor(target);
     const matches = entries.filter((e) => this.stripMetadata(e).includes(oldText));
 
-    if (matches.length === 0) return { success: false, error: `No entry matched '${oldText}'.` };
+    if (matches.length === 0) {
+      // Conflict retry after a successful publish: the entry is already gone.
+      // First-attempt misses still error so typos are not reported as success.
+      if (attempt > 0) return this.successResponse(target, "Entry removed.");
+      return { success: false, error: `No entry matched '${oldText}'.` };
+    }
     if (matches.length > 1 && !this.areDistinctScopedFailureCopies(target, matches)) {
       return {
         success: false,
@@ -826,7 +851,7 @@ export class MemoryStore {
 
   private async runTargetMutation(
     target: "memory" | "user" | "failure",
-    mutation: (markMutation: () => void) => Promise<MemoryResult>,
+    mutation: (markMutation: () => void, attempt: number) => Promise<MemoryResult>,
   ): Promise<MemoryResult> {
     const storagePath = await this.resolveStoragePath(target);
     return withMarkdownMutationLock(storagePath, async () => {
@@ -835,7 +860,7 @@ export class MemoryStore {
         try {
           const result = await mutation(() => {
             mutated = true;
-          });
+          }, attempt);
           if (result.success) {
             // saveToDisk stamps fileFingerprints on success. If an editor
             // truncates/replaces the file after publish returns, refuse the
