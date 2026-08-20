@@ -12,7 +12,11 @@ export default function (pi: ExtensionAPI) {
 			{ name: "memory-index-sessions", description: "Index Pi sessions into memory search" },
 			{ name: "learn-memory-tool", description: "Learn how the memory tools work" },
 			{ name: "memory-preview-context", description: "Preview memory context that would be injected" },
-			{ name: "memory-pin", description: "Pin standing memory instructions" },
+			{
+				name: "memory-pin",
+				description: "Pin standing memory instructions",
+				completions: ["list", "remove", "clear"],
+			},
 			{ name: "memory-sync-markdown", description: "Sync markdown memories into SQLite" },
 		],
 	});
