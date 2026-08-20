@@ -5,7 +5,8 @@
  *
  * Default transport: in-process direct completion (same mechanism as
  * background review — see review-memory-ops.ts). Falls back to a `pi -p`
- * subprocess only if direct mode fails or reviewTransport forces subprocess.
+ * subprocess only for stock Pi providers (or reviewTransport: subprocess).
+ * Extension providers such as NewAPI stay on the live session model.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -20,7 +21,7 @@ import {
 import type { MemoryConfig } from "../types.js";
 import { collectMessageParts } from "./message-parts.js";
 import { execChildPrompt, resolveChildPiModel } from "./pi-child-process.js";
-import { runDirectMemoryCompletion, usesDirectTransport } from "./review-memory-ops.js";
+import { allowSubprocessFallback, runDirectMemoryCompletion, usesDirectTransport } from "./review-memory-ops.js";
 import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
 
 function buildDirectFlushUserPrompt(
@@ -109,8 +110,9 @@ export function setupSessionFlush(
           activeProjectName,
         );
         if (directResult.ok) return;
+        if (!allowSubprocessFallback(config, ctx.model)) return;
       } catch {
-        // Fall through to subprocess below.
+        if (!allowSubprocessFallback(config, ctx.model)) return;
       }
     }
 

@@ -336,7 +336,7 @@ describe("setupSessionFlush", () => {
     const ctx = {
       sessionManager: { getBranch: () => mockBranch(4) },
       cwd: "/tmp/active-project",
-      model: { provider: "local-llama", id: "local-9b" },
+      model: { provider: "openai", id: "gpt-4o" },
       modelRegistry: {},
     };
     await emit(mockPi.handlers, "session_before_compact", { signal: undefined }, ctx);
@@ -345,7 +345,7 @@ describe("setupSessionFlush", () => {
     assert.equal(opts.cwd, "/tmp/active-project");
     const args = logicalChildArgs(mockPi.execCalls[0]);
     assert.deepStrictEqual(args.slice(0, 4), [
-      "-p", "--no-session", "--model", "local-llama/local-9b",
+      "-p", "--no-session", "--model", "openai/gpt-4o",
     ]);
   });
 
@@ -630,6 +630,30 @@ describe("direct transport", () => {
     await emitShutdownAndAwaitFlush(mockPi, mockPi.handlers, defaultFlushCtx());
     assert.equal(directCalls.length, 1);
     assert.equal(mockPi.execCalls.length, 1, "shutdown flush must survive direct throw");
+  });
+
+  it("skips subprocess fallback for NewAPI-style live session models", async () => {
+    const config = defaultConfig({ reviewTransport: "direct" });
+    setupSessionFlush(
+      mockPi.pi,
+      mockStore,
+      null,
+      config,
+      null,
+      null,
+      makeDirectDeps({ ok: false, appliedCount: 0, fallbackReason: "no_auth" }),
+    );
+
+    await primeFlushReady(mockPi.handlers);
+    await emit(
+      mockPi.handlers,
+      "session_before_compact",
+      { signal: undefined },
+      { ...defaultFlushCtx(), model: { provider: "Work", id: "grok-4.6" } },
+    );
+
+    assert.equal(directCalls.length, 1);
+    assert.equal(mockPi.execCalls.length, 0, "NewAPI must not spawn a --no-extensions child");
   });
 
   it("skips direct transport when reviewTransport is subprocess", async () => {

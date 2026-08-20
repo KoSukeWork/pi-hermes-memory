@@ -785,14 +785,14 @@ describe("setupBackgroundReview", () => {
     for (let i = 0; i < 10; i++) {
       fireTurnEnd(makeBranch(10), {
         cwd: "/tmp/local-session",
-        model: { provider: "local-llama", id: "local-9b" },
+        model: { provider: "openai", id: "gpt-4o" },
         signal,
       });
     }
     await reviewSettledSignal.promise;
 
     assert.deepStrictEqual(logicalChildArgs(0).slice(0, 5), [
-      "-p", "--no-session", "--model", "local-llama/local-9b", "--no-extensions",
+      "-p", "--no-session", "--model", "openai/gpt-4o", "--no-extensions",
     ]);
     assert.deepStrictEqual(execCalls[0][2], {
       cwd: "/tmp/local-session",
@@ -801,12 +801,12 @@ describe("setupBackgroundReview", () => {
   });
 
   it("surfaces one actionable diagnostic when direct and subprocess review both fail", async () => {
-    const pi = createMockPi({ code: 1, stdout: "", stderr: "No API key for local-llama/local-9b" });
+    const pi = createMockPi({ code: 1, stdout: "", stderr: "No API key for openai/gpt-4o" });
     setupWithDirectDeps(pi, {
       ok: false,
       appliedCount: 0,
       fallbackReason: "no_auth",
-      error: "No API key for local-llama",
+      error: "No API key for openai",
     }, {
       ...defaultConfig,
       reviewTransport: "direct",
@@ -817,7 +817,7 @@ describe("setupBackgroundReview", () => {
     fireMessageEnd("user");
     for (let i = 0; i < 10; i++) {
       fireTurnEnd(makeBranch(10), {
-        model: { provider: "local-llama", id: "local-9b" },
+        model: { provider: "openai", id: "gpt-4o" },
       });
     }
     await reviewSettledSignal.promise;
@@ -826,8 +826,38 @@ describe("setupBackgroundReview", () => {
     assert.equal(failures.length, 1);
     assert.match(failures[0].msg, /both transports/i);
     assert.match(failures[0].msg, /no_auth/i);
-    assert.match(failures[0].msg, /No API key for local-llama\/local-9b/i);
+    assert.match(failures[0].msg, /No API key for openai\/gpt-4o/i);
     assert.match(failures[0].msg, /llmModelOverride/i);
+  });
+
+  it("skips subprocess fallback for NewAPI-style live session models", async () => {
+    const pi = createMockPi();
+    setupWithDirectDeps(pi, {
+      ok: false,
+      appliedCount: 0,
+      fallbackReason: "no_auth",
+      error: "No API key for Work",
+    }, {
+      ...defaultConfig,
+      reviewTransport: "direct",
+    });
+
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    fireMessageEnd("user");
+    for (let i = 0; i < 10; i++) {
+      fireTurnEnd(makeBranch(10), {
+        model: { provider: "Work", id: "grok-4.6" },
+      });
+    }
+    await reviewSettledSignal.promise;
+
+    assert.strictEqual(directCalls.length, 1);
+    assert.strictEqual(execCalls.length, 0, "NewAPI must not spawn a --no-extensions child");
+    const failures = notifyCalls.filter((n) => n.level === "warning");
+    assert.equal(failures.length, 1);
+    assert.match(failures[0].msg, /live session model/i);
+    assert.match(failures[0].msg, /NewAPI/i);
   });
 
 

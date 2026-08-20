@@ -6,9 +6,11 @@ import * as path from "node:path";
 import { MemoryStore } from "../../src/store/memory-store.js";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import {
+  allowSubprocessFallback,
   applyReviewOperations,
   buildDirectReviewCompletionOptions,
   isAuthRejection,
+  isStockChildProvider,
   parseReviewOperations,
   runDirectMemoryCompletion,
 } from "../../src/handlers/review-memory-ops.js";
@@ -179,6 +181,22 @@ describe("provider auth resolution", () => {
     ]) {
       assert.strictEqual(isAuthRejection(message), false, message);
     }
+  });
+});
+
+describe("allowSubprocessFallback", () => {
+  it("keeps subprocess fallback for stock Pi providers and explicit subprocess transport", () => {
+    assert.equal(isStockChildProvider("openai"), true);
+    assert.equal(allowSubprocessFallback({ reviewTransport: "direct" }, { provider: "openai" }), true);
+    assert.equal(allowSubprocessFallback({ reviewTransport: "subprocess" }, { provider: "Work" }), true);
+    assert.equal(allowSubprocessFallback({ reviewTransport: "direct" }, {}), true);
+    assert.equal(allowSubprocessFallback({ reviewTransport: "direct" }, null), true);
+  });
+
+  it("skips subprocess fallback for NewAPI-style extension providers", () => {
+    assert.equal(isStockChildProvider("Work"), false);
+    assert.equal(allowSubprocessFallback({ reviewTransport: "direct" }, { provider: "Work" }), false);
+    assert.equal(allowSubprocessFallback({ reviewTransport: "direct" }, { provider: "my_gateway" }), false);
   });
 });
 

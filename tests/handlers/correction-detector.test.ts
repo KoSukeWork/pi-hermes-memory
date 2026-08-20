@@ -317,7 +317,7 @@ describe("setupCorrectionDetector handler", () => {
       sessionManager: { getBranch: () => branch },
       signal: undefined,
       cwd: "/tmp/active-project",
-      model: { provider: "local-llama", id: "local-9b" },
+      model: { provider: "openai", id: "gpt-4o" },
       modelRegistry: {},
       ui: {
         notify: (msg: string, level: string) => {
@@ -373,7 +373,7 @@ describe("setupCorrectionDetector handler", () => {
     assert.equal(options.cwd, "/tmp/active-project");
     const args = logicalChildArgs(execCalls[0]);
     assert.deepStrictEqual(args.slice(0, 4), [
-      "-p", "--no-session", "--model", "local-llama/local-9b",
+      "-p", "--no-session", "--model", "openai/gpt-4o",
     ]);
   });
 
@@ -637,6 +637,35 @@ describe("setupCorrectionDetector handler", () => {
 
       assert.strictEqual(directCalls.length, 1);
       assert.ok(execCalls.length >= 1, "thrown direct error must fall back to subprocess");
+    });
+
+    it("skips subprocess fallback for NewAPI-style live session models", async () => {
+      const pi = createMockPi();
+      const { store } = storeWithFailureTracking();
+      setupCorrectionDetector(
+        pi,
+        store as unknown as MemoryStore,
+        null,
+        directTransportConfig,
+        null,
+        null,
+        makeDirectDeps({ ok: false, appliedCount: 0 }),
+      );
+
+      fireMessageEnd("user", "don't do that");
+      const h = handlers["turn_end"];
+      const ctx = {
+        sessionManager: { getBranch: () => correctionBranch() },
+        signal: undefined,
+        cwd: "/tmp/active-project",
+        model: { provider: "Work", id: "grok-4.6" },
+        modelRegistry: {},
+        ui: { notify: (msg: string, level: string) => { notifyCalls.push({ msg, level }); } },
+      };
+      await Promise.all(h.map((fn) => fn({}, ctx)));
+
+      assert.strictEqual(directCalls.length, 1);
+      assert.strictEqual(execCalls.length, 0, "NewAPI must not spawn a --no-extensions child");
     });
 
     it("uses subprocess only when reviewTransport is subprocess", async () => {

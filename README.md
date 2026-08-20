@@ -401,14 +401,14 @@ Both counters reset after each review.
 
 By default, background review, session flush, correction save, and the manual `/memory-consolidate` command use an in-process `completeSimple()` side-channel: a small JSON-only prompt, no child `pi` process, and memory writes applied directly by the extension. This keeps the main session's system prompt, tools, and LLM prefix cache intact, and avoids the subprocess path's argv/`--no-extensions` concerns entirely on the common path.
 
-If direct mode fails (no model, no auth, provider error, unparseable response, or — for consolidation only — a result that didn't actually free any space), it automatically falls back to the legacy `pi -p --no-session` subprocess path. The automatic over-capacity consolidator triggered from `MemoryStore` itself always uses the subprocess path, since it runs without extension-runtime access.
+If direct mode fails for a **stock Pi provider**, it falls back to the legacy `pi -p --no-session` subprocess. Extension providers such as NewAPI gateways are **not** in that child (`--no-extensions`), so overflow, background review, flush, and correction stay on the live session model/registry and do not spawn a doomed child. The automatic over-capacity consolidator uses the same remembered session context.
 
 Set `reviewTransport` in config only when you need to override this:
 
 | Value | Behavior |
 |---|---|
-| `direct` (default) | Try in-process `completeSimple()` first; fall back to subprocess on failure |
-| `subprocess` | Always use `pi -p` subprocess for every LLM-driven memory operation (pre-PR #92 behavior) |
+| `direct` (default) | In-process `completeSimple()` on the live session model. Subprocess fallback only for stock Pi providers |
+| `subprocess` | Always use `pi -p` subprocess (needs `childExtensionPaths` for NewAPI) |
 
 ### Skill Auto-Extraction
 

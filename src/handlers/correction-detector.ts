@@ -25,7 +25,7 @@ import type { MemoryConfig } from "../types.js";
 import { getMessageText } from "../types.js";
 import { execChildPrompt, resolveChildPiModel } from "./pi-child-process.js";
 import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
-import { runDirectMemoryCompletion, usesDirectTransport } from "./review-memory-ops.js";
+import { allowSubprocessFallback, runDirectMemoryCompletion, usesDirectTransport } from "./review-memory-ops.js";
 
 /**
  * Extract the directive part from a correction message.
@@ -254,9 +254,13 @@ export function setupCorrectionDetector(
           if (directResult.ok) {
             savedViaLlm = directResult.appliedCount > 0;
             handledDirect = true;
+          } else if (!allowSubprocessFallback(config, ctx.model)) {
+            handledDirect = true;
           }
         } catch {
-          // Fall through to subprocess below.
+          if (!allowSubprocessFallback(config, ctx.model)) {
+            handledDirect = true;
+          }
         }
       }
 

@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Over-capacity auto-consolidation now uses the live session model registry.** Overflow used to spawn a `--no-extensions` child `pi` that could not see dynamic providers such as NewAPI. The parent now reuses the session `model`/`modelRegistry` captured on `session_start` and `before_agent_start`, matching `/memory-consolidate`. Subprocess remains a fallback only.
+- **Over-capacity auto-consolidation now uses the live session model registry.** Overflow used to spawn a `--no-extensions` child `pi` that could not see dynamic providers such as NewAPI. The parent now reuses the session `model`/`modelRegistry` captured on `session_start` and `before_agent_start`, matching `/memory-consolidate`. Subprocess fallback is only for stock Pi providers.
 
 ### Security
 
@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Portable child extension sources were discarded before Pi could resolve them**: `childExtensionPaths` ran every configured value through Node's cwd-relative `path.resolve()` and required that resulting local path to already exist. This silently dropped Pi-native `~/...`, `git:...`, and `npm:...` extension sources, forcing machine-specific absolute paths for custom providers in isolated subprocesses. Configured sources are now passed unchanged to Pi's standard `-e` resolver, while Hermes-discovered auth adapter paths retain their local existence checks.
+
+## [0.9.12] - 2026-08-20
+
+### Fixed
+
+- **NewAPI (and other extension providers) no longer fall back to a `--no-extensions` child for overflow, background review, flush, or correction.** Direct transport already used the live session model; on failure or a no-op shrink the code still spawned `pi -p`, which cannot see NewAPI and printed `No API key found for the selected model`. Stock providers keep the subprocess fallback. Set `reviewTransport: "subprocess"` plus `childExtensionPaths` only if you want the child path.
 
 ## [0.9.11] - 2026-08-20
 

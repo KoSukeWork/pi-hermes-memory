@@ -18,7 +18,7 @@ import { DatabaseManager } from "../store/db.js";
 import type { MemoryConfig } from "../types.js";
 import { applyRecentMessageLimit, collectMessageParts } from "./message-parts.js";
 import { execChildPrompt, resolveChildPiModel } from "./pi-child-process.js";
-import { runDirectMemoryCompletion, usesDirectTransport, type DirectReviewResult } from "./review-memory-ops.js";
+import { allowSubprocessFallback, runDirectMemoryCompletion, usesDirectTransport, type DirectReviewResult } from "./review-memory-ops.js";
 
 import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
 export interface BackgroundReviewOptions {
@@ -259,6 +259,15 @@ export function setupBackgroundReview(
         } catch (error) {
           directFailure = diagnosticDetail(error);
         }
+      }
+
+      if (directFailure && !allowSubprocessFallback(config, ctx.model)) {
+        ctx.ui.notify(
+          `Memory auto-review failed on the live session model. Direct: ${diagnosticDetail(directFailure)}. `
+            + `Extension providers such as NewAPI are not available to the --no-extensions child, so subprocess fallback was skipped.`,
+          "warning",
+        );
+        return;
       }
 
       let subprocessResult: { code: number; stdout?: string; stderr?: string };

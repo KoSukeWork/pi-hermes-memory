@@ -3,7 +3,7 @@
  */
 
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { completeSimple, type Message, type SimpleStreamOptions } from "@earendil-works/pi-ai/compat";
+import { completeSimple, getProviders, type Message, type SimpleStreamOptions } from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { MemoryStore } from "../store/memory-store.js";
 import type { DatabaseManager } from "../store/db.js";
@@ -46,6 +46,33 @@ export interface RunDirectMemoryCompletionOptions {
  * only on failure, unless the user forces `reviewTransport: "subprocess"`. */
 export function usesDirectTransport(config: Pick<MemoryConfig, "reviewTransport">): boolean {
   return (config.reviewTransport ?? "direct") === "direct";
+}
+
+/** Providers the `--no-extensions` child `pi` can resolve without NewAPI. */
+export function isStockChildProvider(provider: string | undefined): boolean {
+  if (!provider) return false;
+  try {
+    const builtins = getProviders() as unknown as string[];
+    return builtins.includes(provider);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Subprocess fallback is for stock Pi providers (and for an explicit
+ * `reviewTransport: "subprocess"`). Extension providers such as NewAPI
+ * gateways are stripped by `--no-extensions`; falling back only prints
+ * "No API key found for the selected model".
+ */
+export function allowSubprocessFallback(
+  config: Pick<MemoryConfig, "reviewTransport">,
+  liveModel?: { provider?: string } | null,
+): boolean {
+  if ((config.reviewTransport ?? "direct") === "subprocess") return true;
+  if (isStockChildProvider(liveModel?.provider)) return true;
+  if (liveModel?.provider) return false;
+  return true;
 }
 
 type ReviewLlmConfig = Pick<MemoryConfig, "llmModelOverride" | "llmThinkingOverride">;

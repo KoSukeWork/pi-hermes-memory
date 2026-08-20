@@ -26,6 +26,14 @@ function createDirectCtx(): { model: unknown; modelRegistry: unknown; _tag: stri
   return { model: {}, modelRegistry: {}, _tag: "consolidation-direct-ctx" };
 }
 
+function createNewApiDirectCtx(): { model: { provider: string; id: string }; modelRegistry: unknown; _tag: string } {
+  return {
+    model: { provider: "Work", id: "grok-4.6" },
+    modelRegistry: {},
+    _tag: "newapi-direct-ctx",
+  };
+}
+
 function makeDirectDeps(
   result: { ok: boolean; appliedCount: number } | "throw",
 ): { runDirectMemoryCompletion: (...args: unknown[]) => Promise<{ ok: boolean; appliedCount: number }> } {
@@ -621,6 +629,69 @@ it("returns { consolidated: false } when pi.exec throws", async () => {
       assert.strictEqual(result.consolidated, true);
       assert.strictEqual(directCalls.length, 1);
       assert.strictEqual(execCalls.length, 0, "remembered session registry must take the direct path");
+    });
+
+    it("does not fall back to subprocess for NewAPI when direct appliedCount is 0", async () => {
+      const pi = createMockPi();
+      const result = await triggerConsolidation(
+        pi,
+        mockStore,
+        "memory",
+        undefined,
+        60000,
+        "memory",
+        directTransportLlmConfig,
+        createNewApiDirectCtx(),
+        null,
+        null,
+        makeDirectDeps({ ok: true, appliedCount: 0 }),
+      );
+
+      assert.strictEqual(result.consolidated, false);
+      assert.match(result.error ?? "", /live session model/);
+      assert.strictEqual(execCalls.length, 0, "NewAPI must not spawn a --no-extensions child");
+    });
+
+    it("does not fall back to subprocess for NewAPI when direct transport fails", async () => {
+      const pi = createMockPi();
+      const result = await triggerConsolidation(
+        pi,
+        mockStore,
+        "memory",
+        undefined,
+        60000,
+        "memory",
+        directTransportLlmConfig,
+        createNewApiDirectCtx(),
+        null,
+        null,
+        makeDirectDeps({ ok: false, appliedCount: 0 }),
+      );
+
+      assert.strictEqual(result.consolidated, false);
+      assert.match(result.error ?? "", /NewAPI/);
+      assert.strictEqual(execCalls.length, 0);
+    });
+
+    it("does not fall back to subprocess for NewAPI when direct transport throws", async () => {
+      const pi = createMockPi();
+      const result = await triggerConsolidation(
+        pi,
+        mockStore,
+        "memory",
+        undefined,
+        60000,
+        "memory",
+        directTransportLlmConfig,
+        createNewApiDirectCtx(),
+        null,
+        null,
+        makeDirectDeps("throw"),
+      );
+
+      assert.strictEqual(result.consolidated, false);
+      assert.match(result.error ?? "", /NewAPI/);
+      assert.strictEqual(execCalls.length, 0);
     });
 
     it("does not attempt direct transport when directCtx is null", async () => {

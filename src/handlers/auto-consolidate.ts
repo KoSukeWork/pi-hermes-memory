@@ -7,7 +7,8 @@
  * passes the command context; automatic over-capacity consolidation uses the
  * last live session context remembered from session_start / before_agent_start
  * so NewAPI and other dynamic providers stay available. Falls back to a `pi -p`
- * subprocess when direct mode is unavailable, declines, or fails.
+ * subprocess only for stock Pi providers (or `reviewTransport: "subprocess"`).
+ * Extension providers such as NewAPI are not in the `--no-extensions` child.
  *
  * The subprocess child process modifies files on disk, so the parent MUST
  * reload from disk after a subprocess-based consolidation completes.
@@ -28,8 +29,8 @@ import {
 } from "../constants.js";
 import type { ConsolidationResult, MemoryConfig } from "../types.js";
 import { AGENT_ROOT } from "../paths.js";
-import { execChildPrompt } from "./pi-child-process.js";
-import { runDirectMemoryCompletion, usesDirectTransport } from "./review-memory-ops.js";
+import { execChildPrompt, resolveChildPiModel } from "./pi-child-process.js";
+import { allowSubprocessFallback, runDirectMemoryCompletion, usesDirectTransport } from "./review-memory-ops.js";
 import { AtomicLockCoordinator } from "../store/atomic-lock-coordinator.js";
 
 type MemoryTarget = "memory" | "user" | "failure";
@@ -191,6 +192,8 @@ export async function triggerConsolidation(
   const currentContent = entries.join(ENTRY_DELIMITER);
   const runDirect = deps.runDirectMemoryCompletion ?? runDirectMemoryCompletion;
 
+  const canUseChild = allowSubprocessFallback(llmConfig, directCtx?.model);
+
   if (directCtx && usesDirectTransport(llmConfig)) {
     try {
       const directResult = await runDirect(
@@ -214,14 +217,29 @@ export async function triggerConsolidation(
         dbManager,
         projectName,
       );
-      // Consolidation only did its job if it actually freed space — unlike
-      // review/flush/correction, an empty or fully-skipped result here is a
-      // failure worth falling back to subprocess for, not a normal outcome.
       if (directResult.ok && directResult.appliedCount > 0) {
         return { consolidated: true };
       }
-    } catch {
-      // Fall through to subprocess below.
+      if (!canUseChild) {
+        if (directResult.ok) {
+          return {
+            consolidated: false,
+            error: "Auto-consolidation ran on the live session model but did not free enough space.",
+          };
+        }
+        return {
+          consolidated: false,
+          error: directResult.error
+            ?? `Direct consolidation failed (${directResult.fallbackReason ?? "unknown"}). Extension providers such as NewAPI are not available to the --no-extensions child.`,
+        };
+      }
+    } catch (err) {
+      if (!canUseChild) {
+        return {
+          consolidated: false,
+          error: `Direct consolidation failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}. Extension providers such as NewAPI are not available to the --no-extensions child.`,
+        };
+      }
     }
   }
 
@@ -264,6 +282,7 @@ export async function triggerConsolidation(
       signal,
       timeoutMs,
       retryWithoutOverrides: true,
+      model: resolveChildPiModel(directCtx?.model),
     }) as { code: number; stdout?: string; stderr?: string; killed?: boolean };
 
     if (result.code === 0) {
