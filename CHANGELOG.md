@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Retry transient deferred module imports with bounded backoff and clear failed attempts so later lifecycle events can load the extension.
 - **Over-capacity auto-consolidation now uses the live session model registry.** Overflow used to spawn a `--no-extensions` child `pi` that could not see dynamic providers such as NewAPI. The parent now reuses the session `model`/`modelRegistry` captured on `session_start` and `before_agent_start`, matching `/memory-consolidate`. Subprocess fallback is only for stock Pi providers.
 
 ### Security
