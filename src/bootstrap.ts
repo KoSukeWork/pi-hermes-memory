@@ -19,5 +19,6 @@ export default function (pi: ExtensionAPI) {
 			},
 			{ name: "memory-sync-markdown", description: "Sync markdown memories into SQLite" },
 		],
+		startupEvents: ["resources_discover"],
 	});
 }
