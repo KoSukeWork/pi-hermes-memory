@@ -40,6 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`memory_search` ranks by relevance instead of recency** ([#118](https://github.com/chandra447/pi-hermes-memory/pull/118)): FTS5 matches were ordered by `last_referenced DESC` alone, so a long note that mentions a query term once outranked a short memory that is entirely about it, purely because it had been touched more recently. The match now joins `memory_fts` and orders by `bm25(memory_fts)` ascending with `last_referenced DESC` as the tie-break, so the densest match wins and recency only decides between equally relevant rows. Result *sets* are unchanged; only their order is.
 
+- **`memory_search` ranks by relevance instead of recency** ([#118](https://github.com/chandra447/pi-hermes-memory/pull/118)): FTS5 matches were ordered by `last_referenced DESC` alone, so a long note that mentions a query term once outranked a short memory that is entirely about it, purely because it had been touched more recently. The match now joins `memory_fts` and orders by `bm25(memory_fts)` ascending with `last_referenced DESC` as the tie-break, so the densest match wins and recency only decides between equally relevant rows. Result *sets* are unchanged; only their order is.
+
 ## [0.9.4] - 2026-08-08
 
 ### Added
