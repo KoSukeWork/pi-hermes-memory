@@ -116,6 +116,19 @@ function effectiveThinkingOverride(config: ReviewLlmConfig): ThinkingLevel | und
 
 type ReviewModelRegistry = ExtensionContext["modelRegistry"];
 
+export type DirectReviewContext = Pick<ExtensionContext, "model" | "modelRegistry" | "sessionManager">;
+type DirectRequestHeaders = Record<string, string> | undefined;
+const OPENCODE_SESSION_HEADER = "x-opencode-session";
+const OPENCODE_CLIENT_HEADER = "x-opencode-client";
+function directRequestHeaders(model: Model<Api>, headers: DirectRequestHeaders, sessionId?: string): DirectRequestHeaders {
+  if (!sessionId) return headers;
+  let host = "";
+  try { host = new URL(model.baseUrl ?? "").hostname; } catch { /* invalid URL */ }
+  const isOpenCode = model.provider === "opencode" || model.provider === "opencode-go" || host === "opencode.ai";
+  if (!isOpenCode || Object.keys(headers ?? {}).some((key) => key.toLowerCase() === OPENCODE_SESSION_HEADER)) return headers;
+  return { ...(headers ?? {}), [OPENCODE_SESSION_HEADER]: sessionId, [OPENCODE_CLIENT_HEADER]: "pi" };
+}
+
 export function buildDirectReviewCompletionOptions(
   model: Model<Api>,
   auth: {
@@ -125,10 +138,11 @@ export function buildDirectReviewCompletionOptions(
   },
   thinking: ThinkingLevel | undefined,
   signal: AbortSignal,
+  sessionId?: string,
 ): SimpleStreamOptions {
   const options: SimpleStreamOptions = {
     apiKey: auth.apiKey,
-    headers: auth.headers,
+    headers: directRequestHeaders(model, auth.headers, sessionId),
     env: auth.env,
     signal,
   };
@@ -425,7 +439,7 @@ function responseText(content: unknown): string {
 }
 
 export async function runDirectMemoryCompletion(
-  ctx: Pick<ExtensionContext, "model" | "modelRegistry">,
+  ctx: DirectReviewContext,
   store: MemoryStore,
   projectStore: MemoryStore | null,
   options: RunDirectMemoryCompletionOptions,
@@ -438,6 +452,9 @@ export async function runDirectMemoryCompletion(
   if (!model) {
     return { ok: false, appliedCount: 0, fallbackReason: "no_model" };
   }
+
+  let sessionId: string | undefined;
+  try { sessionId = ctx.sessionManager.getSessionId() || undefined; } catch { /* optional */ }
 
   const auth = await resolveRequestAuth(ctx.modelRegistry, model);
   if (!auth.ok || !auth.apiKey) {
@@ -472,7 +489,7 @@ export async function runDirectMemoryCompletion(
       response = await complete(
         model,
         request,
-        buildDirectReviewCompletionOptions(model, requestAuth, thinking, controller.signal),
+        buildDirectReviewCompletionOptions(model, requestAuth, thinking, controller.signal, sessionId),
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -489,7 +506,7 @@ export async function runDirectMemoryCompletion(
       response = await complete(
         model,
         request,
-        buildDirectReviewCompletionOptions(model, requestAuth, thinking, controller.signal),
+          buildDirectReviewCompletionOptions(model, requestAuth, thinking, controller.signal, sessionId),
       );
     }
 
