@@ -132,7 +132,7 @@ function directRequestHeaders(model: Model<Api>, headers: DirectRequestHeaders, 
 export function buildDirectReviewCompletionOptions(
   model: Model<Api>,
   auth: {
-    apiKey: string;
+    apiKey?: string;
     headers?: Record<string, string>;
     env?: Record<string, string>;
   },
@@ -192,6 +192,16 @@ export function isAuthRejection(message: string): boolean {
 export type ResolvedRequestAuth =
   | { ok: true; apiKey?: string; headers?: Record<string, string>; env?: Record<string, string> }
   | { ok: false; error: string };
+
+const CREDENTIAL_HEADER_NAMES = new Set(["authorization", "x-api-key", "cf-aig-authorization"]);
+function hasRequestAuth(modelRegistry: ReviewModelRegistry, model: Model<Api>, auth: Extract<ResolvedRequestAuth, { ok: true }>): boolean {
+  if (typeof auth.apiKey === "string" && auth.apiKey.trim()) return true;
+  if (Object.entries(auth.headers ?? {}).some(([key, value]) => CREDENTIAL_HEADER_NAMES.has(key.toLowerCase()) && typeof value === "string" && value.trim())) return true;
+  return modelRegistry.hasConfiguredAuth(model) && !modelRegistry.isUsingOAuth(model);
+}
+function sameRequestAuth(left: { apiKey?: string; headers?: Record<string, string>; env?: Record<string, string> }, right: { apiKey?: string; headers?: Record<string, string>; env?: Record<string, string> }): boolean {
+  return left.apiKey === right.apiKey && JSON.stringify(left.headers ?? {}) === JSON.stringify(right.headers ?? {}) && JSON.stringify(left.env ?? {}) === JSON.stringify(right.env ?? {});
+}
 
 /**
  * Resolve request auth through the public ModelRegistry API. Resolve it again
@@ -457,7 +467,7 @@ export async function runDirectMemoryCompletion(
   try { sessionId = ctx.sessionManager?.getSessionId() || undefined; } catch { /* optional */ }
 
   const auth = await resolveRequestAuth(ctx.modelRegistry, model);
-  if (!auth.ok || !auth.apiKey) {
+  if (!auth.ok || !hasRequestAuth(ctx.modelRegistry, model, auth)) {
     return {
       ok: false,
       appliedCount: 0,
@@ -500,7 +510,7 @@ export async function runDirectMemoryCompletion(
       // key; otherwise this is a real auth problem and the subprocess
       // fallback should handle it (#139).
       const rotated = await resolveRequestAuth(ctx.modelRegistry, model);
-      if (!rotated.ok || !rotated.apiKey || rotated.apiKey === requestAuth.apiKey) throw err;
+      if (!rotated.ok || !hasRequestAuth(ctx.modelRegistry, model, rotated) || sameRequestAuth(rotated, requestAuth)) throw err;
 
       requestAuth = { apiKey: rotated.apiKey, headers: rotated.headers, env: rotated.env };
       response = await complete(
