@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Policy-only rendered memory headers now use count-only usage labels, sharing the same cap-enforcement rule as tool results.
 - Deferred runtime install failures now include the first load error (for example a missing dependency) instead of reporting only a missing factory, and a factory that already started executing is never re-run.
 - Deferred loading is preserved: startup events (resources_discover, project_trust) are registered only when the bootstrap declares startupEvents, and factory on()/registerCommand() registrations commit only after the factory completes.
 - Deferred session_start replay now uses the latest event received while an asynchronous factory is installing, and replay handlers stay uncommitted until the pending event is drained so events arriving mid-replay cannot overtake the replayed one.
