@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-export type DirectRuntimeContext = Pick<ExtensionContext, "model" | "modelRegistry" | "sessionManager">;
+export type DirectRuntimeContext = Pick<ExtensionContext, "model" | "modelRegistry"> & Partial<Pick<ExtensionContext, "sessionManager">>;
 
 let current: DirectRuntimeContext | null = null;
 
@@ -14,8 +14,10 @@ export function rememberDirectRuntimeContext(ctx: unknown): void {
   current = {
     model: (ctx as DirectRuntimeContext).model,
     modelRegistry: (ctx as DirectRuntimeContext).modelRegistry,
-    sessionManager: (ctx as DirectRuntimeContext).sessionManager,
   };
+  if ("sessionManager" in ctx && (ctx as DirectRuntimeContext).sessionManager) {
+    current.sessionManager = (ctx as DirectRuntimeContext).sessionManager;
+  }
 }
 
 export function getDirectRuntimeContext(): DirectRuntimeContext | null {

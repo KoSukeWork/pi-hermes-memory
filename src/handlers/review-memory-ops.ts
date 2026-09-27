@@ -116,7 +116,7 @@ function effectiveThinkingOverride(config: ReviewLlmConfig): ThinkingLevel | und
 
 type ReviewModelRegistry = ExtensionContext["modelRegistry"];
 
-export type DirectReviewContext = Pick<ExtensionContext, "model" | "modelRegistry" | "sessionManager">;
+export type DirectReviewContext = Pick<ExtensionContext, "model" | "modelRegistry"> & Partial<Pick<ExtensionContext, "sessionManager">>;
 type DirectRequestHeaders = Record<string, string> | undefined;
 const OPENCODE_SESSION_HEADER = "x-opencode-session";
 const OPENCODE_CLIENT_HEADER = "x-opencode-client";
@@ -454,7 +454,7 @@ export async function runDirectMemoryCompletion(
   }
 
   let sessionId: string | undefined;
-  try { sessionId = ctx.sessionManager.getSessionId() || undefined; } catch { /* optional */ }
+  try { sessionId = ctx.sessionManager?.getSessionId() || undefined; } catch { /* optional */ }
 
   const auth = await resolveRequestAuth(ctx.modelRegistry, model);
   if (!auth.ok || !auth.apiKey) {

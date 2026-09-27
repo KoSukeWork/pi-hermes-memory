@@ -183,7 +183,7 @@ export async function triggerConsolidation(
   timeoutMs: number = DEFAULT_CONSOLIDATION_TIMEOUT_MS,
   toolTarget: ToolMemoryTarget = target,
   llmConfig: ConsolidationLlmConfig = {},
-  directCtx: Pick<ExtensionContext, "model" | "modelRegistry" | "sessionManager"> | null = null,
+  directCtx: Pick<ExtensionContext, "model" | "modelRegistry"> & Partial<Pick<ExtensionContext, "sessionManager">> | null = null,
   dbManager: DatabaseManager | null = null,
   projectName?: string | null,
   deps: { runDirectMemoryCompletion?: typeof runDirectMemoryCompletion } = {},
