@@ -494,3 +494,18 @@ describe("loadConfig", () => {
     assert.strictEqual(config.correctionDirectiveWords, undefined);
   });
 });
+
+
+describe("quickCheckOnOpen configuration", () => {
+  it("defaults true and accepts only boolean overrides", () => {
+    fs.mkdirSync(path.dirname(TEST_CONFIG_PATH), { recursive: true });
+    try {
+      for (const value of [true, false, "false", null, 0]) {
+        fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ quickCheckOnOpen: value }));
+        assert.strictEqual(loadConfig(TEST_CONFIG_PATH).quickCheckOnOpen, typeof value === "boolean" ? value : true);
+      }
+    } finally {
+      fs.rmSync(TEST_CONFIG_PATH, { force: true });
+    }
+  });
+});
