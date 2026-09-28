@@ -120,6 +120,10 @@ export class MemoryStore {
     return target === "user" ? this.config.userCharLimit : this.config.memoryCharLimit;
   }
 
+  private get capEnforced(): boolean {
+    return this.config.memoryMode !== "policy-only";
+  }
+
   private charCount(target: "memory" | "user" | "failure"): number {
     const entries = this.entriesFor(target);
     return entries.length ? entries.join(ENTRY_DELIMITER).length : 0;
@@ -232,7 +236,7 @@ export class MemoryStore {
     const encoded = this.encodeEntry(content, today, today, project);
 
     const newTotal = [...entries, encoded].join(ENTRY_DELIMITER).length;
-    if (newTotal > limit) {
+    if (this.capEnforced && newTotal > limit) {
       this.overflowSince[target] ??= Date.now();
       const strategy = this.memoryOverflowStrategy();
 
@@ -439,7 +443,7 @@ export class MemoryStore {
 
       const originalTotal = originalEntries.join(ENTRY_DELIMITER).length;
       const plannedTotal = plannedEntries.join(ENTRY_DELIMITER).length;
-      if (plannedTotal > this.charLimit(target)) {
+      if (this.capEnforced && plannedTotal > this.charLimit(target)) {
         return {
           success: false,
           error: `Memory mutation plan would put memory at ${plannedTotal}/${this.charLimit(target)} chars.`,
@@ -513,7 +517,7 @@ export class MemoryStore {
 
     const newTotal = testEntries.join(ENTRY_DELIMITER).length;
 
-    if (newTotal > this.charLimit(target)) {
+    if (this.capEnforced && newTotal > this.charLimit(target)) {
       return {
         success: false,
         error: `Replacement would put memory at ${newTotal}/${this.charLimit(target)} chars. Shorten or remove other entries first.`,
@@ -720,7 +724,10 @@ export class MemoryStore {
     const resp: MemoryResult = {
       success: true,
       target,
-      usage: `${pct}% — ${current}/${limit} chars`,
+      // policy-only does not enforce the cap, so a percentage would name a
+      // ceiling that is intentionally not applied; report the count alone,
+      // matching memoryFullError's shape.
+      usage: this.capEnforced ? `${pct}% — ${current}/${limit} chars` : `${current} chars`,
       entry_count: entries.length,
     };
     if (message) resp.message = message;
